@@ -27,6 +27,7 @@ env:
   ANDROID_BUILD_TOOLS: '33.0.0'
   ANDROID_MIN_SDK: 23
   ANDROID_TARGET_SDK: 33
+  APK_ARTIFACT_NAME: ojowaPTM-android-debug-apk
 
 jobs:
   build-android:
@@ -78,12 +79,63 @@ jobs:
         run: |
           ls -la android/app/build/outputs/apk/debug/app-debug.apk
 
-      - name: Upload APK artifact
+      - name: Upload APK as workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ojowaPTM-android-debug-apk
+          name: ${{ env.APK_ARTIFACT_NAME }}
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
+
+  publish-release:
+    name: Publish Android GitHub Release
+    needs: build-android
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.APK_ARTIFACT_NAME }}
+          path: ./dist
+
+      - name: Get release version
+        shell: pwsh
+        run: |
+          $version = "1.0.0"
+          if ($env:GITHUB_REF -match "refs/tags/v?(.+)") { $version = $matches[1] }
+          Write-Host "Release version: $version"
+          echo "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.RELEASE_VERSION }}
+          release_name: "ojowaPTM Android v${{ env.RELEASE_VERSION }}"
+          body: |
+            ## ojowaPTM Android v${{ env.RELEASE_VERSION }}
+
+            Phone as Mic for OBS — Android APK release.
+
+            ### Installation
+            1. Download `app-debug.apk`
+            2. Install on your Android device (enable "Install from unknown sources" if needed)
+            3. Connect phone and PC to the same WiFi
+            4. Open the app, enter your OBS PC IP address, and tap START STREAMING
+            5. In OBS, add "ojowaPTM Microphone" as an audio source
+
+            ### Protocol
+            Streams 48kHz s16le mono PCM over TCP port 8765 to the ojowaPTM OBS plugin.
+          files: ./dist/*.apk
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   lint-android:
     name: Lint Android Code
