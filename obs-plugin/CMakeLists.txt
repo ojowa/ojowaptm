@@ -4,15 +4,18 @@ project(ojowaPTM-obs C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# OBS is built from source and installed to CMAKE_PREFIX_PATH (obs-install/)
-# On Windows, libraries are at obs-install/bin/64bit/, headers at obs-install/include/
-set(OBS_INCLUDE_DIR "${CMAKE_PREFIX_PATH}/include")
+# OBS is built from source and installed to obs-install/ at the workspace root
+# Resolve relative to this CMakeLists.txt (obs-plugin/) -> workspace root -> obs-install/
+get_filename_component(WORKSPACE_ROOT "${CMAKE_SOURCE_DIR}/../../" ABSOLUTE)
+set(OBS_INSTALL_PREFIX "${WORKSPACE_ROOT}/obs-install")
+
+set(OBS_INCLUDE_DIR "${OBS_INSTALL_PREFIX}/include")
 
 # Search multiple possible library locations for Windows
 set(OBS_LIB_SEARCH_PATHS
-    "${CMAKE_PREFIX_PATH}/lib"
-    "${CMAKE_PREFIX_PATH}/lib/64bit"
-    "${CMAKE_PREFIX_PATH}/bin/64bit"
+    "${OBS_INSTALL_PREFIX}/lib"
+    "${OBS_INSTALL_PREFIX}/lib/64bit"
+    "${OBS_INSTALL_PREFIX}/bin/64bit"
 )
 
 set(OBS_LIBRARY_FOUND FALSE)
