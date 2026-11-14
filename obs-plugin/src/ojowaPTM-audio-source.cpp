@@ -1,0 +1,267 @@
+#include "ojowaPTM-audio-source.h"
+#include <obs-module.h>
+#include <obs.h>
+#include <util/platform.h>
+#include <util/base.h>
+#include <util/dstr.h>
+#include <util/threading.h>
+
+#include <atomic>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <vector>
+#include <cstring>
+#include <cstdint>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
+#include <fcntl.h>
+
+static const uint16_t OBS_PORT = 8765;
+static const char *OBS_SOURCE_ID = "ojowaptm_audio_source";
+static const char *OBS_SOURCE_NAME = "ojowaPTM Microphone";
+
+static const uint8_t STREAM_MAGIC[4] = {0x4F, 0x50, 0x54, 0x4D}; // "OPTM"
+
+struct ojowaptm_audio_data {
+    obs_source_t *source;
+    os_event_t *stop_event;
+    std::thread *net_thread;
+    std::atomic<bool> running{false};
+
+    std::mutex queue_mutex;
+    std::condition_variable queue_cv;
+    std::vector<std::vector<uint8_t>> pcm_queue;
+
+    uint32_t sample_rate = 48000;
+    uint32_t channels = 1;
+};
+
+static int set_nonblocking(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) return -1;
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+static void *net_thread_proc(void *param) {
+    ojowaptm_audio_data *data = static_cast<ojowaptm_audio_data *>(param);
+
+    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd < 0) {
+        blog(LOG_ERROR, "ojowaPTM: failed to create socket");
+        return nullptr;
+    }
+
+    int opt = 1;
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    set_nonblocking(server_fd);
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(OBS_PORT);
+
+    if (bind(server_fd, (sockaddr *)&addr, sizeof(addr)) < 0) {
+        blog(LOG_ERROR, "ojowaPTM: bind failed on port %d", OBS_PORT);
+        close(server_fd);
+        return nullptr;
+    }
+
+    if (listen(server_fd, 1) < 0) {
+        blog(LOG_ERROR, "ojowaPTM: listen failed");
+        close(server_fd);
+        return nullptr;
+    }
+
+    blog(LOG_INFO, "ojowaPTM: listening on port %d", OBS_PORT);
+
+    fd_set readfds;
+    timeval timeout;
+
+    while (data->running.load()) {
+        FD_ZERO(&readfds);
+        FD_SET(server_fd, &readfds);
+        timeout.tv_sec = 0;
+        timeout.tv_usec = 200000;
+
+        int activity = select(server_fd + 1, &readfds, nullptr, nullptr, &timeout);
+        if (activity < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (activity == 0) continue;
+
+        if (FD_ISSET(server_fd, &readfds)) {
+            int client_fd = accept(server_fd, nullptr, nullptr);
+            if (client_fd < 0) continue;
+
+            set_nonblocking(client_fd);
+            blog(LOG_INFO, "ojowaPTM: phone connected");
+
+            uint8_t header[10];
+
+            while (data->running.load()) {
+                size_t header_offset = 0;
+                while (header_offset < 10 && data->running.load()) {
+                    fd_set r;
+                    FD_ZERO(&r);
+                    FD_SET(client_fd, &r);
+                    timeout.tv_sec = 0;
+                    timeout.tv_usec = 200000;
+                    int sel = select(client_fd + 1, &r, nullptr, nullptr, &timeout);
+                    if (sel <= 0) continue;
+
+                    ssize_t n = recv(client_fd, reinterpret_cast<char *>(header + header_offset), 10 - header_offset, 0);
+                    if (n <= 0) {
+                        if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+                        goto disconnect;
+                    }
+                    header_offset += (size_t)n;
+                }
+                if (!data->running.load()) goto disconnect;
+
+                if (memcmp(header, STREAM_MAGIC, 4) != 0) {
+                    blog(LOG_WARNING, "ojowaPTM: bad magic, disconnecting");
+                    goto disconnect;
+                }
+
+                uint16_t sample_rate = header[4] | (header[5] << 8);
+                uint16_t channels = header[6] | (header[7] << 8);
+                uint16_t bit_depth = header[8] | (header[9] << 8);
+
+                data->sample_rate = sample_rate;
+                data->channels = channels;
+
+                uint8_t buf[4096];
+                while (data->running.load()) {
+                    fd_set r;
+                    FD_ZERO(&r);
+                    FD_SET(client_fd, &r);
+                    timeout.tv_sec = 0;
+                    timeout.tv_usec = 200000;
+                    int sel = select(client_fd + 1, &r, nullptr, nullptr, &timeout);
+                    if (sel <= 0) continue;
+
+                    ssize_t n = recv(client_fd, reinterpret_cast<char *>(buf), sizeof(buf), 0);
+                    if (n <= 0) {
+                        if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+                        goto disconnect;
+                    }
+
+                    std::vector<uint8_t> chunk(buf, buf + n);
+                    {
+                        std::lock_guard<std::mutex> lock(data->queue_mutex);
+                        data->pcm_queue.push_back(std::move(chunk));
+                    }
+                    data->queue_cv.notify_one();
+                }
+            }
+
+        disconnect:
+            close(client_fd);
+            blog(LOG_INFO, "ojowaPTM: phone disconnected");
+        }
+    }
+
+    close(server_fd);
+    return nullptr;
+}
+
+static void *ojowaptm_audio_create(obs_data_t *settings, obs_source_t *source) {
+    UNUSED_PARAMETER(settings);
+    auto data = new ojowaptm_audio_data();
+    data->source = source;
+    os_event_init(&data->stop_event, OS_EVENT_TYPE_MANUAL);
+    data->running.store(true);
+    data->net_thread = new std::thread(net_thread_proc, data);
+    return data;
+}
+
+static void ojowaptm_audio_destroy(void *data) {
+    auto *d = static_cast<ojowaptm_audio_data *>(data);
+    d->running.store(false);
+    os_event_set(d->stop_event);
+    if (d->net_thread) {
+        d->net_thread->join();
+        delete d->net_thread;
+    }
+    os_event_destroy(d->stop_event);
+    delete d;
+}
+
+static void ojowaptm_audio_render(void *data, uint64_t start_ts, uint64_t end_ts) {
+    UNUSED_PARAMETER(start_ts);
+    UNUSED_PARAMETER(end_ts);
+
+    auto *d = static_cast<ojowaptm_audio_data *>(data);
+
+    std::vector<uint8_t> chunk;
+    {
+        std::unique_lock<std::mutex> lock(d->queue_mutex);
+        if (!d->pcm_queue.empty()) {
+            chunk = std::move(d->pcm_queue.front());
+            d->pcm_queue.erase(d->pcm_queue.begin());
+        }
+    }
+
+    if (chunk.empty()) return;
+
+    size_t frames = chunk.size() / (2 * d->channels);
+    if (frames == 0) return;
+
+    const int16_t *s16 = reinterpret_cast<const int16_t *>(chunk.data());
+    float *samples = new float[frames * d->channels];
+    for (size_t i = 0; i < frames * d->channels; i++) {
+        samples[i] = s16[i] / 32768.0f;
+    }
+
+    struct obs_source_audio audio{};
+    audio.data = samples;
+    audio.frames = frames;
+    audio.timestamp = os_gettime_ns();
+    audio.samples_per_sec = d->sample_rate;
+    audio.format = OBS_AUDIO_FORMAT_FLOAT_PLANAR;
+    audio.speakers = (d->channels == 1) ? SPEAKERS_MONO : SPEAKERS_STEREO;
+
+    obs_source_output_audio(d->source, &audio);
+
+    delete[] samples;
+}
+
+static obs_properties_t *ojowaptm_audio_properties(void *data) {
+    UNUSED_PARAMETER(data);
+    obs_properties_t *props = obs_properties_create();
+    obs_properties_add_text(props, "device_id", "Device ID", OBS_TEXT_DEFAULT);
+    return props;
+}
+
+static const char *ojowaptm_audio_get_name(void *unused) {
+    UNUSED_PARAMETER(unused);
+    return OBS_SOURCE_NAME;
+}
+
+static obs_source_info ojowaptm_audio_source_info = {
+    .id = OBS_SOURCE_ID,
+    .type = OBS_SOURCE_TYPE_INPUT,
+    .output_flags = OBS_SOURCE_AUDIO,
+    .get_name = ojowaptm_audio_get_name,
+    .create = ojowaptm_audio_create,
+    .destroy = ojowaptm_audio_destroy,
+    .render_audio = ojowaptm_audio_render,
+    .get_properties = ojowaptm_audio_properties,
+};
+
+bool obs_module_load(void) {
+    obs_register_source(&ojowaptm_audio_source_info);
+    blog(LOG_INFO, "ojowaPTM OBS plugin loaded");
+    return true;
+}
+
+void obs_module_unload(void) {
+    blog(LOG_INFO, "ojowaPTM OBS plugin unloaded");
+}
+
+const char *obs_module_name(void) {
+    return "ojowaPTM Microphone";
+}
