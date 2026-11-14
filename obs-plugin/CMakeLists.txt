@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # OBS is built from source and installed to obs-install/ at the workspace root
 # Resolve relative to this CMakeLists.txt (obs-plugin/) -> workspace root -> obs-install/
-get_filename_component(WORKSPACE_ROOT "${CMAKE_SOURCE_DIR}/../../" ABSOLUTE)
+get_filename_component(WORKSPACE_ROOT "${CMAKE_SOURCE_DIR}/.." ABSOLUTE)
 set(OBS_INSTALL_PREFIX "${WORKSPACE_ROOT}/obs-install")
 
 set(OBS_INCLUDE_DIR "${OBS_INSTALL_PREFIX}/include")
