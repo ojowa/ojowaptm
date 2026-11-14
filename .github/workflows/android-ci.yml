@@ -73,12 +73,18 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Make Gradle wrapper executable
-        run: chmod +x android/gradlew
+      - name: Install Gradle via SDKMAN
+        run: |
+          curl -s "https://get.sdkman.io" | bash
+          source "$HOME/.sdkman/bin/sdkman-init.sh"
+          sdk install gradle 8.5
+          echo "GRADLE_USER_HOME=$HOME/.gradle" >> $GITHUB_ENV
 
       - name: Build Android Debug APK
         working-directory: android
-        run: ./gradlew assembleDebug
+        run: |
+          source "$HOME/.sdkman/bin/sdkman-init.sh"
+          gradle assembleDebug
 
       - name: Verify APK exists
         run: |
