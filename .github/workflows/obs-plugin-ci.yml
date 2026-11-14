@@ -14,61 +14,12 @@ on:
 
 env:
   CMAKE_VERSION: '3.25'
-  OBS_PORT: 8765
+  MSI_PRODUCT_NAME: "ojowaPTM OBS Microphone Plugin"
+  MSI_OUTPUT_NAME: "ojowaptm-obs-plugin-setup.msi"
 
 jobs:
-  build-linux:
-    name: Build OBS Plugin (Linux)
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            cmake \
-            git \
-            libobs-dev \
-            libwebsocketpp-dev \
-            libssl-dev \
-            pkg-config
-
-      - name: Verify OBS headers
-        run: |
-          ls /usr/include/obs-module.h /usr/include/obs.h || true
-          dpkg -l | grep libobs || true
-
-      - name: Configure CMake
-        working-directory: obs-plugin
-        run: |
-          cmake -S . -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_CXX_STANDARD=17 \
-            -DCMAKE_CXX_STANDARD_REQUIRED=ON
-
-      - name: Build OBS plugin
-        working-directory: obs-plugin
-        run: cmake --build build --config Release -j$(nproc)
-
-      - name: Verify plugin binary
-        run: |
-          find obs-plugin/build -name "*.so" -o -name "*.dll" | xargs ls -la || true
-
-      - name: Upload plugin artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ojowaptm-obs-plugin-linux
-          path: |
-            obs-plugin/build/*.so
-          retention-days: 30
-
-  build-windows:
-    name: Build OBS Plugin (Windows)
+  build-windows-msi:
+    name: Build Windows MSI Installer
     runs-on: windows-latest
     timeout-minutes: 60
 
@@ -76,8 +27,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up MSBuild
-        uses: microsoft/setup-msbuild@v2
+      - name: Install WiX Toolset
+        run: |
+          # WiX is typically available on windows-latest via Chocolatey
+          choco install wixtoolset -y --no-progress || true
+          # Verify WiX tools exist
+          Get-Command candle.exe -ErrorAction SilentlyContinue
+          Get-Command light.exe -ErrorAction SilentlyContinue
 
       - name: Install CMake
         uses: lukka/run-cmake@v5
@@ -90,11 +46,95 @@ jobs:
           installPrefix: ''
           cmakeMinimumRequiredVersion: 3.20
 
-      - name: Upload plugin artifact
+      - name: Build OBS plugin DLL
+        shell: cmd
+        run: |
+          cd ${{runner.workspace}}\obs-plugin\build
+          cmake --build . --config Release -j%NUMBER_OF_PROCESSORS%
+
+      - name: Locate built DLL
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem -Path "${{runner.workspace}}/obs-plugin/build" -Filter "*.dll" -Recurse | Select-Object -First 1
+          if (-not $dll) { throw "OBS plugin DLL not found in build output" }
+          Write-Host "Found DLL: $($dll.FullName)"
+          echo "DLL_PATH=$($dll.FullName)" >> $env:GITHUB_ENV
+
+      - name: Build MSI Installer with WiX
+        shell: cmd
+        run: |
+          set WIX_BIN="C:\Program Files (x86)\WiX Toolset v3.11\bin"
+          if not exist %WIX_BIN%\candle.exe set WIX_BIN="C:\Program Files\WiX Toolset v3.11\bin"
+          if not exist %WIX_BIN%\candle.exe set WIX_BIN="C:\Program Files (x86)\WiX Toolset v4.0\bin"
+          if not exist %WIX_BIN%\candle.exe set WIX_BIN="C:\Program Files\WiX Toolset v4.0\bin"
+
+          cd /d "%GITHUB_WORKSPACE%\obs-plugin"
+          %WIX_BIN%\candle.exe ojowaptm-obs-plugin.wxs -ext WixUtilExtension -o ojowaptm-obs-plugin.wixobj -DPPluginTargetDir="%DLL_PATH%~dp"
+          %WIX_BIN%\light.exe -ext WixUtilExtension -sval -o ojowaptm-obs-plugin-setup.msi ojowaptm-obs-plugin.wixobj
+
+      - name: Verify MSI exists
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem -Path "${{runner.workspace}}/obs-plugin" -Filter "*.msi" | Select-Object -First 1
+          if (-not $msi) { throw "MSI installer not found" }
+          Write-Host "MSI: $($msi.FullName)"
+          Write-Host "Size: $($msi.Length / 1MB) MB"
+          echo "MSI_PATH=$($msi.FullName)" >> $env:GITHUB_ENV
+
+      - name: Upload MSI as workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ojowaptm-obs-plugin-windows
-          path: |
-            obs-plugin/build/*.dll
-            obs-plugin/Release/*.dll
+          name: ojowaptm-obs-plugin-msi
+          path: ${{ env.MSI_PATH }}
           retention-days: 30
+
+  publish-release:
+    name: Publish GitHub Release with MSI
+    needs: build-windows-msi
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download MSI artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ojowaptm-obs-plugin-msi
+          path: ./dist
+
+      - name: Get release version
+        shell: pwsh
+        run: |
+          $version = "1.0.0"
+          if ($env:GITHUB_REF -match "refs/tags/v?(.+)") { $version = $matches[1] }
+          Write-Host "Release version: $version"
+          echo "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Create or update GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.RELEASE_VERSION }}
+          release_name: "ojowaPTM OBS Plugin v${{ env.RELEASE_VERSION }}"
+          body: |
+            ## ojowaPTM OBS Microphone Plugin v${{ env.RELEASE_VERSION }}
+
+            Windows MSI installer for the ojowaPTM OBS Microphone audio source plugin.
+
+            ### Installation
+            1. Download `ojowaptm-obs-plugin-setup.msi`
+            2. Run the installer
+            3. Restart OBS Studio
+            4. Add "ojowaPTM Microphone" as an audio source in OBS
+
+            ### Protocol
+            The plugin listens on TCP port 8765 and expects the OPTM stream format from the ojowaPTM mobile app.
+          files: ./dist/*.msi
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
