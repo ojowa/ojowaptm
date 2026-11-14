@@ -1,6 +1,7 @@
 name: Android CI/CD
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
     paths:
@@ -20,6 +21,13 @@ on:
       - 'app.json'
       - '.github/workflows/android-ci.yml'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 env:
   NODE_VERSION: '20'
   JAVA_VERSION: '17'
@@ -28,6 +36,7 @@ env:
   ANDROID_MIN_SDK: 23
   ANDROID_TARGET_SDK: 33
   NDK_VERSION: '21.4.7075529'
+  GRADLE_VERSION: '8.5'
   APK_ARTIFACT_NAME: ojowaPTM-android-debug-apk
 
 jobs:
@@ -35,21 +44,17 @@ jobs:
     name: Build Android APK
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    continue-on-error: false
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Set up Java
+      - name: Set up JDK
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
           java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
 
       - name: Install Android SDK Command Line Tools
         run: |
@@ -70,6 +75,11 @@ jobs:
           sdkmanager "build-tools;${{ env.ANDROID_BUILD_TOOLS }}"
           sdkmanager "ndk;${{ env.NDK_VERSION }}"
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
       - name: Install dependencies
         run: npm install
 
@@ -77,8 +87,21 @@ jobs:
         run: |
           curl -s "https://get.sdkman.io" | bash
           source "$HOME/.sdkman/bin/sdkman-init.sh"
-          sdk install gradle 8.5
+          sdk install gradle ${{ env.GRADLE_VERSION }}
           echo "GRADLE_USER_HOME=$HOME/.gradle" >> $GITHUB_ENV
+
+      - name: Decode Android release keystore (optional)
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            mkdir -p android/app
+            echo "${ANDROID_KEYSTORE_BASE64}" | base64 -d > android/app/ojowaptm-upload-keystore.jks
+            echo "ANDROID_KEYSTORE_PATH=$GITHUB_WORKSPACE/android/app/ojowaptm-upload-keystore.jks" >> $GITHUB_ENV
+            echo "Release keystore decoded"
+          else
+            echo "No release keystore provided — debug build only"
+          fi
 
       - name: Build Android Debug APK
         working-directory: android
@@ -86,15 +109,62 @@ jobs:
           source "$HOME/.sdkman/bin/sdkman-init.sh"
           gradle assembleDebug
 
-      - name: Verify APK exists
+      - name: Build Android Release APK and AAB (optional)
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ env.ANDROID_KEYSTORE_PATH }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          ls -la android/app/build/outputs/apk/debug/app-debug.apk
+          if [ -n "$ANDROID_KEYSTORE_PATH" ]; then
+            echo "ANDROID_KEYSTORE_PATH=$ANDROID_KEYSTORE_PATH" >> $GITHUB_ENV
+            echo "KEY_ALIAS=$KEY_ALIAS" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=$KEY_PASSWORD" >> $GITHUB_ENV
+            echo "ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD" >> $GITHUB_ENV
+            working-directory: android
+            source "$HOME/.sdkman/bin/sdkman-init.sh"
+            gradle assembleRelease bundleRelease
+          else
+            echo "Skipping release build — no keystore configured"
+          fi
 
-      - name: Upload APK as workflow artifact
+      - name: Stage artifacts into publish folder
+        run: |
+          mkdir -p ci-output/apk/publish ci-output/apk-release/publish ci-output/aab/publish
+          cp android/app/build/outputs/apk/debug/app-debug.apk ci-output/apk/publish/
+          if [ -f android/app/build/outputs/apk/release/app-release.apk ]; then
+            cp android/app/build/outputs/apk/release/app-release.apk ci-output/apk-release/publish/
+          fi
+          if [ -f android/app/build/outputs/bundle/release/app-release.aab ]; then
+            cp android/app/build/outputs/bundle/release/app-release.aab ci-output/aab/publish/
+          fi
+          echo "=== Staged artifacts ==="
+          find ci-output -type f
+
+      - name: Upload Android Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.APK_ARTIFACT_NAME }}
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: ci-output/apk/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Android Release APK
+        if: env.ANDROID_KEYSTORE_PATH != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ojowaPTM-android-apk-release
+          path: ci-output/apk-release/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Android AAB
+        if: env.ANDROID_KEYSTORE_PATH != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ojowaPTM-android-aab
+          path: ci-output/aab/
+          if-no-files-found: error
           retention-days: 30
 
   publish-release:
@@ -108,7 +178,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download APK artifact
+      - name: Download Debug APK artifact
         uses: actions/download-artifact@v4
         with:
           name: ${{ env.APK_ARTIFACT_NAME }}
