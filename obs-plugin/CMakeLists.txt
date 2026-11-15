@@ -4,44 +4,28 @@ project(ojowaPTM-obs C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# OBS is built from source and installed to obs-install/ at the workspace root
-# Resolve relative to this CMakeLists.txt (obs-plugin/) -> workspace root -> obs-install/
-get_filename_component(WORKSPACE_ROOT "${CMAKE_SOURCE_DIR}/.." ABSOLUTE)
-set(OBS_INSTALL_PREFIX "${WORKSPACE_ROOT}/obs-install")
-
-set(OBS_INCLUDE_DIR "${OBS_INSTALL_PREFIX}/include")
-
-# Search multiple possible library locations for Windows
-set(OBS_LIB_SEARCH_PATHS
-    "${OBS_INSTALL_PREFIX}/lib"
-    "${OBS_INSTALL_PREFIX}/lib/64bit"
-    "${OBS_INSTALL_PREFIX}/bin/64bit"
+# OBS is built from source and installed to obs-install/ at workspace root
+# Use find_path/find_library for robust discovery
+find_path(OBS_INCLUDE_DIR obs-module.h
+    PATHS "${CMAKE_SOURCE_DIR}/../obs-install"
+    NO_DEFAULT_PATH
 )
 
-set(OBS_LIBRARY_FOUND FALSE)
-foreach(search_path ${OBS_LIB_SEARCH_PATHS})
-    if(EXISTS "${search_path}/obs.lib")
-        set(OBS_LIBRARIES "${search_path}/obs.lib")
-        set(OBS_LIBRARY_FOUND TRUE)
-        message(STATUS "Found OBS library at ${search_path}/obs.lib")
-        break()
-    elseif(EXISTS "${search_path}/libobs.lib")
-        set(OBS_LIBRARIES "${search_path}/libobs.lib")
-        set(OBS_LIBRARY_FOUND TRUE)
-        message(STATUS "Found OBS library at ${search_path}/libobs.lib")
-        break()
-    endif()
-endforeach()
+find_library(OBS_LIBRARY NAMES obs libobs
+    PATHS "${CMAKE_SOURCE_DIR}/../obs-install"
+    NO_DEFAULT_PATH
+)
 
-if(NOT OBS_LIBRARY_FOUND)
-    message(FATAL_ERROR "OBS library not found in any of: ${OBS_LIB_SEARCH_PATHS}")
+if(NOT OBS_INCLUDE_DIR)
+    message(FATAL_ERROR "OBS headers not found. Checked ${CMAKE_SOURCE_DIR}/../obs-install/include")
 endif()
 
-if(EXISTS "${OBS_INCLUDE_DIR}/obs-module.h")
-    message(STATUS "Found OBS headers at ${OBS_INCLUDE_DIR}")
-else()
-    message(FATAL_ERROR "OBS headers not found at ${OBS_INCLUDE_DIR}")
+if(NOT OBS_LIBRARY)
+    message(FATAL_ERROR "OBS library not found. Checked ${CMAKE_SOURCE_DIR}/../obs-install")
 endif()
+
+message(STATUS "Found OBS headers at ${OBS_INCLUDE_DIR}")
+message(STATUS "Found OBS library at ${OBS_LIBRARY}")
 
 include_directories(${OBS_INCLUDE_DIR})
 
@@ -49,7 +33,7 @@ add_library(ojowaPTM-obs MODULE
     src/ojowaPTM-audio-source.cpp
 )
 
-target_link_libraries(ojowaPTM-obs PRIVATE ${OBS_LIBRARIES})
+target_link_libraries(ojowaPTM-obs PRIVATE ${OBS_LIBRARY})
 
 set_target_properties(ojowaPTM-obs PROPERTIES
     PREFIX ""
