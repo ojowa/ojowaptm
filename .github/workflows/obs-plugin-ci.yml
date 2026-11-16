@@ -49,7 +49,8 @@ jobs:
       - name: Install OBS dependencies
         shell: pwsh
         run: |
-          ./obs-studio/CI/windows/01_install_dependencies.ps1
+          # Use CMake preset included with OBS 33.x
+          cmake -S obs-studio -B obs-studio/build --preset default
 
       - name: Resolve Direct3D compiler library
         shell: pwsh
