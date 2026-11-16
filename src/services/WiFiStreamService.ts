@@ -51,7 +51,6 @@ export class WiFiStreamService {
         tls: false,
       });
 
-      socket.setEncoding('utf8');
       socket.setNoDelay(true);
 
       socket.on('connect', () => {

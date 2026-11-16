@@ -274,7 +274,7 @@ static void ojowaptm_audio_render(void *data, uint64_t start_ts, uint64_t end_ts
     audio.frames = static_cast<uint32_t>(frames);
     audio.timestamp = os_gettime_ns();
     audio.samples_per_sec = d->sample_rate;
-    audio.format = AUDIO_FORMAT_FLOAT;
+    audio.format = AUDIO_FORMAT_FLOAT_PLANAR;
     audio.speakers = (d->channels == 1) ? SPEAKERS_MONO : SPEAKERS_STEREO;
 
     obs_source_output_audio(d->source, &audio);
