@@ -49,18 +49,14 @@ jobs:
       - name: Install OBS dependencies
         shell: pwsh
         run: |
-          # Use OBS Studio's CI dependency script for Windows (downloads matching windows-deps for tag 33.0.1)
-          ./obs-studio/CI/windows/01_install_dependencies.ps1
+          # Download windows-deps for OBS Studio 33.0.1
+          $depsVersion = '2024-03-19'
+          $depsArchive = Join-Path $env:RUNNER_TEMP "windows-deps-$depsVersion-x64.zip"
           $depsPath = Join-Path $env:RUNNER_TEMP 'obs-deps'
-          if (-not (Test-Path $depsPath)) {
-            # Fallback: download windows-deps directly
-            $depsVersion = '2024-03-19'
-            $depsArchive = Join-Path $env:RUNNER_TEMP "windows-deps-$depsVersion-x64.zip"
-            Invoke-WebRequest `
-              -Uri "https://github.com/obsproject/obs-deps/releases/download/$depsVersion/windows-deps-$depsVersion-x64.zip" `
-              -OutFile $depsArchive
-            Expand-Archive -Path $depsArchive -DestinationPath $depsPath
-          }
+          Invoke-WebRequest `
+            -Uri "https://github.com/obsproject/obs-deps/releases/download/$depsVersion/windows-deps-$depsVersion-x64.zip" `
+            -OutFile $depsArchive
+          Expand-Archive -Path $depsArchive -DestinationPath $depsPath
           Add-Content -Path $env:GITHUB_ENV -Value "OBS_DepsPath64=$depsPath"
 
       - name: Resolve Direct3D compiler library
