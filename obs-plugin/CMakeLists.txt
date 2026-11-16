@@ -5,22 +5,15 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # OBS is built from source. Headers are in obs-studio/libobs/, libraries in obs-install/bin/64bit/
-find_path(OBS_INCLUDE_DIR obs-module.h
-    PATHS "${CMAKE_SOURCE_DIR}/../obs-studio/libobs"
-    NO_DEFAULT_PATH
-)
+set(OBS_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../obs-studio/libobs")
+set(OBS_LIBRARY "${CMAKE_SOURCE_DIR}/../obs-install/bin/64bit/obs.lib")
 
-find_library(OBS_LIBRARY NAMES obs libobs
-    PATHS "${CMAKE_SOURCE_DIR}/../obs-install/bin/64bit"
-    NO_DEFAULT_PATH
-)
-
-if(NOT OBS_INCLUDE_DIR)
-    message(FATAL_ERROR "OBS headers not found. Checked ${CMAKE_SOURCE_DIR}/../obs-studio/libobs")
+if(NOT EXISTS "${OBS_INCLUDE_DIR}/obs-module.h")
+    message(FATAL_ERROR "OBS headers not found at ${OBS_INCLUDE_DIR}")
 endif()
 
-if(NOT OBS_LIBRARY)
-    message(FATAL_ERROR "OBS library not found. Checked ${CMAKE_SOURCE_DIR}/../obs-install/bin/64bit")
+if(NOT EXISTS "${OBS_LIBRARY}")
+    message(FATAL_ERROR "OBS library not found at ${OBS_LIBRARY}")
 endif()
 
 message(STATUS "Found OBS headers at ${OBS_INCLUDE_DIR}")
