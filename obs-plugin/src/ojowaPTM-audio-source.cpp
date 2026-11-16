@@ -22,6 +22,9 @@
 # define SOCK_EINTR WSAEINTR
 # define SOCK_EWOULDBLOCK WSAEWOULDBLOCK
 # define SOCK_CLOSE closesocket
+# ifndef ssize_t
+#   define ssize_t int64_t
+# endif
 #else
 # include <sys/socket.h>
 # include <netinet/in.h>
@@ -192,7 +195,8 @@ static void *net_thread_proc(void *param) {
                         goto disconnect;
                     }
 
-                    std::vector<uint8_t> chunk(buf, buf + n);
+                    std::vector<uint8_t> chunk;
+                    chunk.insert(chunk.end(), buf, buf + n);
                     {
                         std::lock_guard<std::mutex> lock(data->queue_mutex);
                         data->pcm_queue.push_back(std::move(chunk));
@@ -267,7 +271,7 @@ static void ojowaptm_audio_render(void *data, uint64_t start_ts, uint64_t end_ts
     audio.frames = frames;
     audio.timestamp = os_gettime_ns();
     audio.samples_per_sec = d->sample_rate;
-    audio.format = OBS_AUDIO_FORMAT_FLOAT_PLANAR;
+    audio.format = OBS_AUDIO_FORMAT_FLOAT;
     audio.speakers = (d->channels == 1) ? SPEAKERS_MONO : SPEAKERS_STEREO;
 
     obs_source_output_audio(d->source, &audio);
