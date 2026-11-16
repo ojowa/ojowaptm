@@ -21,7 +21,7 @@ permissions:
   contents: read
 
 env:
-  OBS_VERSION: '30.1.2'
+  OBS_VERSION: '33.0.1'
   MSI_OUTPUT_NAME: ojowaptm-obs-plugin-setup.msi
 
 jobs:

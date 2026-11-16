@@ -244,14 +244,14 @@ static void ojowaptm_audio_destroy(void *data) {
     delete d;
 }
 
-static bool ojowaptm_audio_render(void *data, uint64_t *start_ts,
-                                   obs_source_audio_mix *audio_mix,
-                                   uint32_t sample_rate, size_t channel_count,
-                                   size_t block_size) {
-    UNUSED_PARAMETER(start_ts);
+static bool ojowaptm_audio_render(void *data, uint64_t *ts_out,
+                                   struct obs_source_audio_mix *audio_output,
+                                   uint32_t mixers, size_t channels,
+                                   size_t sample_rate) {
+    UNUSED_PARAMETER(ts_out);
+    UNUSED_PARAMETER(mixers);
+    UNUSED_PARAMETER(channels);
     UNUSED_PARAMETER(sample_rate);
-    UNUSED_PARAMETER(channel_count);
-    UNUSED_PARAMETER(block_size);
 
     auto *d = static_cast<ojowaptm_audio_data *>(data);
 
@@ -273,17 +273,14 @@ static bool ojowaptm_audio_render(void *data, uint64_t *start_ts,
     const int16_t *s16 = reinterpret_cast<const int16_t *>(chunk.data());
 
     // Reuse persistent render buffer so audio data stays valid
-    // after this callback returns (OBS reads from audio_mix later).
+    // after this callback returns.
     d->render_buffer.resize(frames * d->channels);
     float *samples = d->render_buffer.data();
     for (size_t i = 0; i < frames * d->channels; i++) {
         samples[i] = s16[i] / 32768.0f;
     }
 
-    audio_mix->channel_count = d->channels;
-    audio_mix->block_size = frames;
-    audio_mix->sample_rate = d->sample_rate;
-    audio_mix->audio_channels[0] = samples;
+    audio_output->audio_channels[0] = samples;
 
     return true;
 }
