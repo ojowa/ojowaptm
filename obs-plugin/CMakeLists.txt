@@ -4,24 +4,23 @@ project(ojowaPTM-obs C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# OBS is built from source and installed to obs-install/ at workspace root
-# Use find_path/find_library for robust discovery
+# OBS is built from source. Headers are in obs-studio/libobs/, libraries in obs-install/bin/64bit/
 find_path(OBS_INCLUDE_DIR obs-module.h
-    PATHS "${CMAKE_SOURCE_DIR}/../obs-install"
+    PATHS "${CMAKE_SOURCE_DIR}/../obs-studio/libobs"
     NO_DEFAULT_PATH
 )
 
 find_library(OBS_LIBRARY NAMES obs libobs
-    PATHS "${CMAKE_SOURCE_DIR}/../obs-install"
+    PATHS "${CMAKE_SOURCE_DIR}/../obs-install/bin/64bit"
     NO_DEFAULT_PATH
 )
 
 if(NOT OBS_INCLUDE_DIR)
-    message(FATAL_ERROR "OBS headers not found. Checked ${CMAKE_SOURCE_DIR}/../obs-install/include")
+    message(FATAL_ERROR "OBS headers not found. Checked ${CMAKE_SOURCE_DIR}/../obs-studio/libobs")
 endif()
 
 if(NOT OBS_LIBRARY)
-    message(FATAL_ERROR "OBS library not found. Checked ${CMAKE_SOURCE_DIR}/../obs-install")
+    message(FATAL_ERROR "OBS library not found. Checked ${CMAKE_SOURCE_DIR}/../obs-install/bin/64bit")
 endif()
 
 message(STATUS "Found OBS headers at ${OBS_INCLUDE_DIR}")
