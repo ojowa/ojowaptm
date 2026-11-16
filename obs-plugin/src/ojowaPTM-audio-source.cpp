@@ -21,6 +21,7 @@
 # define SOCK_ERRNO WSAGetLastError()
 # define SOCK_EINTR WSAEINTR
 # define SOCK_EWOULDBLOCK WSAEWOULDBLOCK
+# define SOCK_EAGAIN WSAEWOULDBLOCK
 # define SOCK_CLOSE closesocket
 # ifndef ssize_t
 #   define ssize_t int64_t
@@ -33,6 +34,7 @@
 # define SOCK_ERRNO errno
 # define SOCK_EINTR EINTR
 # define SOCK_EWOULDBLOCK EWOULDBLOCK
+# define SOCK_EAGAIN EAGAIN
 # define SOCK_CLOSE close
 #endif
 
@@ -44,7 +46,6 @@ static const uint8_t STREAM_MAGIC[4] = {0x4F, 0x50, 0x54, 0x4D}; // "OPTM"
 
 struct ojowaptm_audio_data {
     obs_source_t *source;
-    os_event_t *stop_event;
     std::thread *net_thread;
     std::atomic<bool> running{false};
 
@@ -81,11 +82,15 @@ static void *net_thread_proc(void *param) {
 #endif
 
 #ifdef _WIN32
-    SOCKET server_fd = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
+    SOCKET server_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 #else
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
 #endif
-    if (server_fd < 0 || server_fd == INVALID_SOCKET) {
+#ifdef _WIN32
+    if (server_fd == INVALID_SOCKET) {
+#else
+    if (server_fd < 0) {
+#endif
         blog(LOG_ERROR, "ojowaPTM: failed to create socket");
 #ifdef _WIN32
         WSACleanup();
@@ -158,7 +163,7 @@ static void *net_thread_proc(void *param) {
                     int sel = select((int)client_fd + 1, &r, nullptr, nullptr, &timeout);
                     if (sel <= 0) continue;
 
-                    ssize_t n = recv(client_fd, reinterpret_cast<char *>(header + header_offset), 10 - header_offset, 0);
+                    ssize_t n = recv(client_fd, reinterpret_cast<char *>(header + header_offset), static_cast<int>(10 - header_offset), 0);
                     if (n <= 0) {
                         if (SOCK_ERRNO == SOCK_EWOULDBLOCK || SOCK_ERRNO == SOCK_EAGAIN) continue;
                         goto disconnect;
@@ -189,7 +194,7 @@ static void *net_thread_proc(void *param) {
                     int sel = select((int)client_fd + 1, &r, nullptr, nullptr, &timeout);
                     if (sel <= 0) continue;
 
-                    ssize_t n = recv(client_fd, reinterpret_cast<char *>(buf), sizeof(buf), 0);
+                    ssize_t n = recv(client_fd, reinterpret_cast<char *>(buf), static_cast<int>(sizeof(buf)), 0);
                     if (n <= 0) {
                         if (SOCK_ERRNO == SOCK_EWOULDBLOCK || SOCK_ERRNO == SOCK_EAGAIN) continue;
                         goto disconnect;
@@ -222,7 +227,6 @@ static void *ojowaptm_audio_create(obs_data_t *settings, obs_source_t *source) {
     UNUSED_PARAMETER(settings);
     auto data = new ojowaptm_audio_data();
     data->source = source;
-    os_event_init(&data->stop_event, OS_EVENT_TYPE_MANUAL);
     data->running.store(true);
     data->net_thread = new std::thread(net_thread_proc, data);
     return data;
@@ -231,12 +235,10 @@ static void *ojowaptm_audio_create(obs_data_t *settings, obs_source_t *source) {
 static void ojowaptm_audio_destroy(void *data) {
     auto *d = static_cast<ojowaptm_audio_data *>(data);
     d->running.store(false);
-    os_event_set(d->stop_event);
     if (d->net_thread) {
         d->net_thread->join();
         delete d->net_thread;
     }
-    os_event_destroy(d->stop_event);
     delete d;
 }
 
@@ -257,6 +259,7 @@ static void ojowaptm_audio_render(void *data, uint64_t start_ts, uint64_t end_ts
 
     if (chunk.empty()) return;
 
+    if (d->channels == 0) return;
     size_t frames = chunk.size() / (2 * d->channels);
     if (frames == 0) return;
 
@@ -267,11 +270,11 @@ static void ojowaptm_audio_render(void *data, uint64_t start_ts, uint64_t end_ts
     }
 
     struct obs_source_audio audio{};
-    audio.data = samples;
-    audio.frames = frames;
+    audio.data[0] = reinterpret_cast<const uint8_t *>(samples);
+    audio.frames = static_cast<uint32_t>(frames);
     audio.timestamp = os_gettime_ns();
     audio.samples_per_sec = d->sample_rate;
-    audio.format = OBS_AUDIO_FORMAT_FLOAT;
+    audio.format = AUDIO_FORMAT_FLOAT;
     audio.speakers = (d->channels == 1) ? SPEAKERS_MONO : SPEAKERS_STEREO;
 
     obs_source_output_audio(d->source, &audio);
@@ -291,18 +294,21 @@ static const char *ojowaptm_audio_get_name(void *unused) {
     return OBS_SOURCE_NAME;
 }
 
-static obs_source_info ojowaptm_audio_source_info = {
-    .id = OBS_SOURCE_ID,
-    .type = OBS_SOURCE_TYPE_INPUT,
-    .output_flags = OBS_SOURCE_AUDIO,
-    .get_name = ojowaptm_audio_get_name,
-    .create = ojowaptm_audio_create,
-    .destroy = ojowaptm_audio_destroy,
-    .render_audio = ojowaptm_audio_render,
-    .get_properties = ojowaptm_audio_properties,
-};
+static obs_source_info ojowaptm_audio_source_info{};
+
+static void initialize_source_info() {
+    ojowaptm_audio_source_info.id = OBS_SOURCE_ID;
+    ojowaptm_audio_source_info.type = OBS_SOURCE_TYPE_INPUT;
+    ojowaptm_audio_source_info.output_flags = OBS_SOURCE_AUDIO;
+    ojowaptm_audio_source_info.get_name = ojowaptm_audio_get_name;
+    ojowaptm_audio_source_info.create = ojowaptm_audio_create;
+    ojowaptm_audio_source_info.destroy = ojowaptm_audio_destroy;
+    ojowaptm_audio_source_info.render_audio = ojowaptm_audio_render;
+    ojowaptm_audio_source_info.get_properties = ojowaptm_audio_properties;
+}
 
 bool obs_module_load(void) {
+    initialize_source_info();
     obs_register_source(&ojowaptm_audio_source_info);
     blog(LOG_INFO, "ojowaPTM OBS plugin loaded");
     return true;
