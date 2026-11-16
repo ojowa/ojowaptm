@@ -1,34 +1,45 @@
-name: OBS Plugin Build - Windows
+name: OBS Plugin Build & Deploy
 
 on:
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Version tag to deploy (e.g. v1.0.1)'
+        required: false
   push:
     branches: [ main ]
     paths:
       - 'obs-plugin/**'
       - '.github/workflows/obs-plugin-ci.yml'
+      - 'tools/**'
   pull_request:
     branches: [ main ]
     paths:
       - 'obs-plugin/**'
       - '.github/workflows/obs-plugin-ci.yml'
+      - 'tools/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
+  issues: write
+  pull-requests: write
 
 env:
   OBS_VERSION: '33.0.1'
   MSI_OUTPUT_NAME: ojowaptm-obs-plugin-setup.msi
 
 jobs:
-  obs-plugin-windows:
+  build-windows:
     name: Build Windows MSI Installer
     runs-on: windows-2022
     timeout-minutes: 90
+    outputs:
+      msi-path: ${{ steps.package.outputs.msi-path }}
+      msi-name: ${{ steps.package.outputs.msi-name }}
 
     steps:
       - name: Checkout repository
@@ -295,39 +306,46 @@ jobs:
           if (-not (Test-Path (Join-Path $dest 'lib/avcodec.lib'))) { throw 'FFmpeg import lib staging failed' }
           Write-Host "Staged FFmpeg development build to $dest"
 
-      - name: Build OjowaPTM OBS Plugin MSI
+      - name: Package MSI (WiX v7)
+        id: package
         shell: pwsh
         run: |
-          $pluginOutput = Join-Path $env:GITHUB_WORKSPACE 'obs-plugin/build'
-          $pluginDll = Join-Path $pluginOutput 'bin/64bit/ojowaptm-obs.dll'
-          if (-not (Test-Path $pluginDll)) { throw 'OBS plugin DLL was not built.' }
+          $wixBin = "$env:ProgramFiles\WiX Toolset v7.0\bin"
+          $pluginDll = Join-Path $env:GITHUB_WORKSPACE 'obs-plugin/build/Release/ojowaPTM-obs.dll'
+          if (-not (Test-Path $pluginDll)) {
+            $pluginDll = Get-ChildItem -Path "$env:GITHUB_WORKSPACE/obs-plugin/build" -Filter "ojowaptm-obs.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $pluginDll) { throw 'OBS plugin DLL was not built.' }
+            $pluginDll = $pluginDll.FullName
+          }
+          Write-Host "Plugin DLL: $pluginDll"
+
           $pluginStage = Join-Path $env:RUNNER_TEMP 'ojowaptm-obs-plugin-msi'
           New-Item -ItemType Directory -Force -Path (Join-Path $pluginStage 'bin/64bit') | Out-Null
-          New-Item -ItemType Directory -Force -Path (Join-Path $pluginStage 'data') | Out-Null
-          Copy-Item -LiteralPath $pluginDll -Destination (Join-Path $pluginStage 'bin/64bit/ojowaptm-obs.dll')
-          $ffmpegBin = Join-Path $env:GITHUB_WORKSPACE '.deps/ffmpeg/bin'
-          foreach ($dllName in 'avcodec-62.dll', 'avutil-60.dll') {
-            $src = Join-Path $ffmpegBin $dllName
-            if (-not (Test-Path $src)) { throw "Missing FFmpeg runtime DLL: $src" }
-            Copy-Item -LiteralPath $src -Destination (Join-Path $pluginStage 'bin/64bit') -Force
-          }
-          candle.exe "-dPluginDir=$pluginStage" -out obs-plugin/build/ojowaptm-obs-plugin.wixobj obs-plugin/ojowaptm-obs-plugin.wxs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          light.exe -out obs-plugin/build/${env:MSI_OUTPUT_NAME} obs-plugin/build/ojowaptm-obs-plugin.wixobj
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Write-Host "MSI built: obs-plugin/build/${env:MSI_OUTPUT_NAME}"
+          Copy-Item -LiteralPath $pluginDll -Destination (Join-Path $pluginStage 'bin/64bit/ojowaptm-obs.dll') -Force
 
-      - name: Upload OjowaPTM OBS Plugin MSI (Windows)
+          $msiPath = Join-Path $env:GITHUB_WORKSPACE "obs-plugin/build/${env:MSI_OUTPUT_NAME}"
+          & "$wixBin\wix.exe" build `
+            "obs-plugin/ojowaptm-obs-plugin.wxs" `
+            -dPluginTargetDir="$pluginStage/bin/64bit/" `
+            -out $msiPath 2>&1 | Select-Object -Last 8
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          if (-not (Test-Path $msiPath)) { throw 'MSI was not produced.' }
+          Write-Host "MSI built: $msiPath"
+          echo "msi-path=$msiPath" >> $env:GITHUB_OUTPUT
+          echo "msi-name=${env:MSI_OUTPUT_NAME}" >> $env:GITHUB_OUTPUT
+
+      - name: Upload OjowaPTM OBS Plugin MSI
         uses: actions/upload-artifact@v4
         with:
           name: ojowaptm-obs-plugin-msi
           path: obs-plugin/build/${{ env.MSI_OUTPUT_NAME }}
           retention-days: 30
 
-  publish-release:
-    name: Publish GitHub Release with MSI
-    needs: obs-plugin-windows
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'push'
+  deploy-release:
+    name: Deploy GitHub Release
+    needs: build-windows
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -341,19 +359,22 @@ jobs:
           name: ojowaptm-obs-plugin-msi
           path: ./dist
 
-      - name: Get release version
+      - name: Determine release version
         shell: pwsh
         run: |
-          $version = "1.0.0"
-          if ($env:GITHUB_REF -match "refs/tags/v?(.+)") { $version = $matches[1] }
-          Write-Host "Release version: $version"
-          echo "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
+          $tag = "${{ github.ref_name }}"
+          if (-not $tag -or $tag -eq "main") {
+            $tag = "${{ github.event.inputs.tag_name }}"
+          }
+          if (-not $tag) { throw 'No version tag specified. Push a tag (e.g. v1.0.1) or use workflow_dispatch with tag_name.' }
+          Write-Host "Release version: $tag"
+          echo "RELEASE_VERSION=$tag" >> $env:GITHUB_ENV
 
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ env.RELEASE_VERSION }}
-          release_name: "ojowaPTM OBS Plugin v${{ env.RELEASE_VERSION }}"
+          tag_name: ${{ env.RELEASE_VERSION }}
+          release_name: "ojowaPTM OBS Plugin ${{ env.RELEASE_VERSION }}"
           body: |
             ## ojowaPTM OBS Microphone Plugin v${{ env.RELEASE_VERSION }}
 
