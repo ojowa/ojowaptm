@@ -19,7 +19,7 @@ endif()
 message(STATUS "Found OBS headers at ${OBS_INCLUDE_DIR}")
 message(STATUS "Found OBS library at ${OBS_LIBRARY}")
 
-include_directories(${OBS_INCLUDE_DIR} "${CMAKE_SOURCE_DIR}/include" "${CMAKE_SOURCE_DIR}/../obs-studio/deps/w32-pthreads")
+include_directories(${OBS_INCLUDE_DIR} "${CMAKE_SOURCE_DIR}/include" "${CMAKE_SOURCE_DIR}/../obs-studio/deps/w32-pthreads" "${CMAKE_SOURCE_DIR}/../obs-studio/deps/w32-pthreads/pthread")
 
 add_library(ojowaPTM-obs MODULE
     src/ojowaPTM-audio-source.cpp
