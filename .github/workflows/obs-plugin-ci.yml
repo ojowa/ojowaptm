@@ -219,15 +219,15 @@ jobs:
       - name: Configure OjowaPTM OBS Plugin (Windows)
         shell: pwsh
         run: |
-          $env:CMAKE_PREFIX_PATH = "$env:GITHUB_WORKSPACE/obs-install"
-          cmake -S obs-plugin -B obs-plugin/build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$env:GITHUB_WORKSPACE/obs-install"
+          # Use CMake preset for plugin configuration
+          cmake --preset windows-x64 -S obs-plugin -B obs-plugin/build -DCMAKE_PREFIX_PATH="$env:GITHUB_WORKSPACE/obs-install"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Write-Host "OjowaPTM plugin configure complete"
 
       - name: Build OjowaPTM OBS Plugin (Windows)
         shell: pwsh
         run: |
-          cmake --build obs-plugin/build --config Release --target ojowaptm-obs -j 4
+          cmake --build --preset windows-x64 --target ojowaptm-obs --config Release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Write-Host "OjowaPTM plugin build complete"
 
