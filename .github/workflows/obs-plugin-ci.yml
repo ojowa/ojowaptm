@@ -42,21 +42,14 @@ jobs:
           }
           Write-Host "CMake version: $(cmake --version | Select-Object -First 1)"
 
-      - name: Install OBS dependencies
-        shell: pwsh
-        run: |
-          $depsVersion = '2024-03-19'
-          $depsArchive = Join-Path $env:RUNNER_TEMP "windows-deps-$depsVersion-x64.zip"
-          $depsPath = Join-Path $env:RUNNER_TEMP 'obs-deps'
-          Invoke-WebRequest `
-            -Uri "https://github.com/obsproject/obs-deps/releases/download/$depsVersion/windows-deps-$depsVersion-x64.zip" `
-            -OutFile $depsArchive
-          Expand-Archive -Path $depsArchive -DestinationPath $depsPath
-          Add-Content -Path $env:GITHUB_ENV -Value "OBS_DepsPath64=$depsPath"
-
       - name: Clone OBS Studio SDK
         run: |
           git clone --depth 1 --shallow-submodules --recurse-submodules --branch ${{ env.OBS_VERSION }} https://github.com/obsproject/obs-studio.git obs-studio
+
+      - name: Install OBS dependencies
+        shell: pwsh
+        run: |
+          ./obs-studio/CI/windows/01_install_dependencies.ps1
 
       - name: Resolve Direct3D compiler library
         shell: pwsh
@@ -138,7 +131,7 @@ jobs:
       - name: Configure OBS Studio (Windows)
         shell: pwsh
         run: |
-          cmake -S obs-studio -B obs-studio/build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DENABLE_UI=OFF -DENABLE_PLUGINS=OFF -DENABLE_SCRIPTING=OFF -DENABLE_STREAMFX=OFF -DENABLE_SPEECH_TO_TEXT=OFF -DENABLE_VST=OFF -DENABLE_WEBRTC=OFF
+          cmake -S obs-studio -B obs-studio/build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DENABLE_UI=OFF -DENABLE_PLUGINS=OFF -DENABLE_SCRIPTING=OFF -DENABLE_VST=OFF -DENABLE_WEBRTC=OFF
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $vcx = Get-ChildItem obs-studio/build/libobs-d3d11 -Filter 'libobs-d3d11.vcxproj' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($vcx) {
