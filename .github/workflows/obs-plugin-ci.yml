@@ -166,11 +166,28 @@ jobs:
       - name: Stage OBS headers and import lib for plugin
         shell: pwsh
         run: |
+          # Stage OBS headers from source tree
           New-Item -ItemType Directory -Force -Path .deps/obs-studio | Out-Null
           Copy-Item -Recurse obs-studio/libobs .deps/obs-studio/libobs
-          New-Item -ItemType Directory -Force -Path .deps/obs-lib | Out-Null
-          Copy-Item obs-install/bin/64bit/obs.lib .deps/obs-lib/obs.lib
           if (-not (Test-Path .deps/obs-studio/libobs/obs-module.h)) { throw 'obs-module.h staging failed' }
+
+          # Find obs.lib - OBS 33.x may install it in different locations
+          $obsLibPaths = @(
+            "$env:GITHUB_WORKSPACE/obs-install/bin/64bit/obs.lib",
+            "$env:GITHUB_WORKSPACE/obs-install/lib/64bit/obs.lib",
+            "$env:GITHUB_WORKSPACE/obs-install/lib/obs.lib",
+            "$env:GITHUB_WORKSPACE/obs-studio/build/libobs/Release/obs.lib",
+            "$env:GITHUB_WORKSPACE/obs-studio/build/libobs/Debug/obs.lib"
+          )
+          $obsLib = $null
+          foreach ($p in $obsLibPaths) {
+            if (Test-Path $p) { $obsLib = $p; break }
+          }
+          if (-not $obsLib) { throw 'obs.lib not found in any expected location' }
+          Write-Host "Found obs.lib at: $obsLib"
+
+          New-Item -ItemType Directory -Force -Path .deps/obs-lib | Out-Null
+          Copy-Item -LiteralPath $obsLib -Destination .deps/obs-lib/obs.lib
           if (-not (Test-Path .deps/obs-lib/obs.lib)) { throw 'obs.lib staging failed' }
           Write-Host "Staged OBS development files into .deps/"
 
