@@ -28,3 +28,9 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# OBS build artifacts (local build dependencies)
+ci-libs/
+obs-deps/
+obs-install/
+obs-studio/

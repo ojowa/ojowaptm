@@ -1,22 +1,7 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product
-    Id="*"
-    Name="ojowaPTM OBS Microphone Plugin"
-    Language="1033"
-    Version="1.0.0"
-    Manufacturer="ojowa"
-    UpgradeCode="a1b2c3d4-e5f6-7890-abcd-ef1234567890">
+﻿<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="ojowaPTM OBS Microphone Plugin" Language="1033" Version="1.0.0" Manufacturer="ojowa" UpgradeCode="a1b2c3d4-e5f6-7890-abcd-ef1234567890"><SummaryInformation Description="ojowaPTM OBS Microphone Plugin MSI" Manufacturer="ojowa" />
 
-    <Package
-      InstallerVersion="500"
-      Compressed="yes"
-      InstallScope="perMachine"
-      Description="ojowaPTM OBS Microphone Plugin MSI"
-      Comments="Installs the ojowaPTM Microphone audio source for OBS Studio"
-      Manufacturer="ojowa" />
-
-    <MajorUpgrade AllowSameVersionUpgrades="yes" />
+    <MajorUpgrade AllowDowngrades="yes" />
 
     <MediaTemplate EmbedCab="yes" />
 
@@ -24,23 +9,23 @@
       <ComponentGroupRef Id="PluginComponents" />
     </Feature>
 
-    <Directory Id="TARGETDIR" Name="SourceDir">
-      <Directory Id="ProgramFilesFolder">
-        <Directory Id="OBSFolder" Name="obs-studio">
-          <Directory Id="PluginsFolder" Name="obs-plugins">
-            <Directory Id="INSTALLDIR" Name="ojowaptm-obs">
-              <Component Id="PluginDllComponent" Guid="b2c3d4e5-f6a7-8901-bcde-f23456789012">
-                <File Id="ojowaptmPluginDll" Name="ojowaptm-obs.dll" Source="$(var.PluginTargetDir)ojowaptm-obs.dll" KeyPath="yes" />
-              </Component>
-            </Directory>
-          </Directory>
-        </Directory>
-      </Directory>
-    </Directory>
+    
 
     <ComponentGroup Id="PluginComponents">
       <ComponentRef Id="PluginDllComponent" />
     </ComponentGroup>
 
-  </Product>
+  
+      <StandardDirectory Id="ProgramFilesFolder">
+        <Directory Id="OBSFolder" Name="obs-studio">
+          <Directory Id="PluginsFolder" Name="obs-plugins">
+            <Directory Id="INSTALLDIR" Name="ojowaptm-obs">
+              <Component Id="PluginDllComponent" Guid="b2c3d4e5-f6a7-8901-bcde-f23456789012">
+                <File Id="ojowaptmPluginDll" Name="ojowaptm-obs.dll" Source="obs-plugin/build/Release/ojowaptm-obs.dll" KeyPath="yes" />
+              </Component>
+            </Directory>
+          </Directory>
+        </Directory>
+      </StandardDirectory>
+    </Package>
 </Wix>

@@ -1,3 +1,23 @@
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600
+#endif
+
+#ifdef _WIN32
+# include <winsock2.h>
+# pragma comment(lib, "ws2_32.lib")
+# define SOCK_ERRNO WSAGetLastError()
+# define SOCK_EINTR WSAEINTR
+# define SOCK_EWOULDBLOCK WSAEWOULDBLOCK
+# define SOCK_EAGAIN WSAEWOULDBLOCK
+# define SOCK_CLOSE closesocket
+# ifndef ssize_t
+#   define ssize_t int64_t
+# endif
+#endif
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600
+#endif
+
 #include "ojowaPTM-audio-source.h"
 #include <obs-module.h>
 #include <obs.h>
@@ -16,7 +36,6 @@
 
 #ifdef _WIN32
 # include <winsock2.h>
-# include <ws2tcpip.h>
 # pragma comment(lib, "ws2_32.lib")
 # define SOCK_ERRNO WSAGetLastError()
 # define SOCK_EINTR WSAEINTR
@@ -275,7 +294,7 @@ static bool ojowaptm_audio_render(void *data, uint64_t *ts_out,
         samples[i] = s16[i] / 32768.0f;
     }
 
-    audio_output->audio_channels[0] = samples;
+    audio_output->output[0].data[0] = samples;
 
     // Output timestamp for audio sync
     if (ts_out) *ts_out = os_gettime_ns();
@@ -322,3 +341,4 @@ void obs_module_unload(void) {
 const char *obs_module_name(void) {
     return "ojowaPTM Microphone";
 }
+
