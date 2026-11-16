@@ -6,15 +6,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # OBS built from source: headers in obs-studio/libobs/, library in obs-install/bin/64bit/
 set(OBS_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../obs-studio/libobs")
-set(OBS_LIBRARY "")
 
-# Find obs.lib in common install locations
+# Find obs.lib using CMAKE_PREFIX_PATH (set to obs-install) plus explicit fallbacks
 find_library(OBS_LIBRARY NAMES obs.lib
     PATHS "${CMAKE_SOURCE_DIR}/../obs-install/bin/64bit"
           "${CMAKE_SOURCE_DIR}/../obs-install/lib/64bit"
+          "${CMAKE_SOURCE_DIR}/../obs-install/lib"
           "${CMAKE_SOURCE_DIR}/../obs-studio/build/libobs/Release"
           "${CMAKE_SOURCE_DIR}/../obs-studio/build/libobs/Debug"
-    NO_DEFAULT_PATH)
+)
 
 if(NOT OBS_LIBRARY)
     message(FATAL_ERROR "obs.lib not found. Check OBS build/install paths.")
