@@ -55,6 +55,8 @@ struct ojowaptm_audio_data {
 
     uint32_t sample_rate = 48000;
     uint32_t channels = 1;
+
+    std::vector<float> render_buffer;
 };
 
 #ifdef _WIN32
@@ -242,9 +244,14 @@ static void ojowaptm_audio_destroy(void *data) {
     delete d;
 }
 
-static void ojowaptm_audio_render(void *data, uint64_t start_ts, uint64_t end_ts) {
+static bool ojowaptm_audio_render(void *data, uint64_t *start_ts,
+                                   obs_source_audio_mix *audio_mix,
+                                   uint32_t sample_rate, size_t channel_count,
+                                   size_t block_size) {
     UNUSED_PARAMETER(start_ts);
-    UNUSED_PARAMETER(end_ts);
+    UNUSED_PARAMETER(sample_rate);
+    UNUSED_PARAMETER(channel_count);
+    UNUSED_PARAMETER(block_size);
 
     auto *d = static_cast<ojowaptm_audio_data *>(data);
 
@@ -257,29 +264,28 @@ static void ojowaptm_audio_render(void *data, uint64_t start_ts, uint64_t end_ts
         }
     }
 
-    if (chunk.empty()) return;
+    if (chunk.empty()) return false;
 
-    if (d->channels == 0) return;
+    if (d->channels == 0) return false;
     size_t frames = chunk.size() / (2 * d->channels);
-    if (frames == 0) return;
+    if (frames == 0) return false;
 
     const int16_t *s16 = reinterpret_cast<const int16_t *>(chunk.data());
-    float *samples = new float[frames * d->channels];
+
+    // Reuse persistent render buffer so audio data stays valid
+    // after this callback returns (OBS reads from audio_mix later).
+    d->render_buffer.resize(frames * d->channels);
+    float *samples = d->render_buffer.data();
     for (size_t i = 0; i < frames * d->channels; i++) {
         samples[i] = s16[i] / 32768.0f;
     }
 
-    struct obs_source_audio audio{};
-    audio.data[0] = reinterpret_cast<const uint8_t *>(samples);
-    audio.frames = static_cast<uint32_t>(frames);
-    audio.timestamp = os_gettime_ns();
-    audio.samples_per_sec = d->sample_rate;
-    audio.format = AUDIO_FORMAT_FLOAT_PLANAR;
-    audio.speakers = (d->channels == 1) ? SPEAKERS_MONO : SPEAKERS_STEREO;
+    audio_mix->channel_count = d->channels;
+    audio_mix->block_size = frames;
+    audio_mix->sample_rate = d->sample_rate;
+    audio_mix->audio_channels[0] = samples;
 
-    obs_source_output_audio(d->source, &audio);
-
-    delete[] samples;
+    return true;
 }
 
 static obs_properties_t *ojowaptm_audio_properties(void *data) {
