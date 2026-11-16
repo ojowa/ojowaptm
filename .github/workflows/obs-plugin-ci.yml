@@ -49,8 +49,19 @@ jobs:
       - name: Install OBS dependencies
         shell: pwsh
         run: |
-          # Use CMake preset included with OBS 33.x
-          cmake -S obs-studio -B obs-studio/build --preset default
+          # Use OBS Studio's CI dependency script for Windows (downloads matching windows-deps for tag 33.0.1)
+          ./obs-studio/CI/windows/01_install_dependencies.ps1
+          $depsPath = Join-Path $env:RUNNER_TEMP 'obs-deps'
+          if (-not (Test-Path $depsPath)) {
+            # Fallback: download windows-deps directly
+            $depsVersion = '2024-03-19'
+            $depsArchive = Join-Path $env:RUNNER_TEMP "windows-deps-$depsVersion-x64.zip"
+            Invoke-WebRequest `
+              -Uri "https://github.com/obsproject/obs-deps/releases/download/$depsVersion/windows-deps-$depsVersion-x64.zip" `
+              -OutFile $depsArchive
+            Expand-Archive -Path $depsArchive -DestinationPath $depsPath
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "OBS_DepsPath64=$depsPath"
 
       - name: Resolve Direct3D compiler library
         shell: pwsh
@@ -247,6 +258,29 @@ jobs:
           } else {
             Write-Host "No DLL found to sign"
           }
+
+      - name: Download FFmpeg development build (Windows)
+        shell: pwsh
+        run: |
+          # Shared (LGPL) FFmpeg n8.1: headers + import libs for configure,
+          # runtime DLLs for staging next to the plugin (find via .deps/ffmpeg).
+          $ffmpegBuild = 'ffmpeg-n8.1-latest-win64-lgpl-shared-8.1'
+          $ffmpegArchive = Join-Path $env:RUNNER_TEMP "$ffmpegBuild.zip"
+          Invoke-WebRequest `
+            -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$ffmpegBuild.zip" `
+            -OutFile $ffmpegArchive
+          $extractPath = Join-Path $env:RUNNER_TEMP 'ffmpeg-extract'
+          Expand-Archive -Path $ffmpegArchive -DestinationPath $extractPath -Force
+          $inner = Get-ChildItem $extractPath -Directory | Select-Object -First 1
+          if (-not $inner) { throw 'FFmpeg archive extraction failed' }
+          $dest = Join-Path $env:GITHUB_WORKSPACE '.deps/ffmpeg'
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          foreach ($sub in 'include', 'lib', 'bin') {
+            Copy-Item -Recurse -Force (Join-Path $inner.FullName $sub) $dest
+          }
+          if (-not (Test-Path (Join-Path $dest 'include/libavcodec/avcodec.h'))) { throw 'FFmpeg include staging failed' }
+          if (-not (Test-Path (Join-Path $dest 'lib/avcodec.lib'))) { throw 'FFmpeg import lib staging failed' }
+          Write-Host "Staged FFmpeg development build to $dest"
 
       - name: Build OjowaPTM OBS Plugin MSI
         shell: pwsh
