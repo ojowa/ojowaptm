@@ -248,11 +248,6 @@ static bool ojowaptm_audio_render(void *data, uint64_t *ts_out,
                                    struct obs_source_audio_mix *audio_output,
                                    uint32_t mixers, size_t channels,
                                    size_t sample_rate) {
-    UNUSED_PARAMETER(ts_out);
-    UNUSED_PARAMETER(mixers);
-    UNUSED_PARAMETER(channels);
-    UNUSED_PARAMETER(sample_rate);
-
     auto *d = static_cast<ojowaptm_audio_data *>(data);
 
     std::vector<uint8_t> chunk;
@@ -266,21 +261,24 @@ static bool ojowaptm_audio_render(void *data, uint64_t *ts_out,
 
     if (chunk.empty()) return false;
 
-    if (d->channels == 0) return false;
-    size_t frames = chunk.size() / (2 * d->channels);
+    if (channels == 0) return false;
+    size_t frames = chunk.size() / (2 * channels);
     if (frames == 0) return false;
 
     const int16_t *s16 = reinterpret_cast<const int16_t *>(chunk.data());
 
     // Reuse persistent render buffer so audio data stays valid
-    // after this callback returns.
-    d->render_buffer.resize(frames * d->channels);
+    // after this callback returns (OBS reads from audio_output later).
+    d->render_buffer.resize(frames * channels);
     float *samples = d->render_buffer.data();
-    for (size_t i = 0; i < frames * d->channels; i++) {
+    for (size_t i = 0; i < frames * channels; i++) {
         samples[i] = s16[i] / 32768.0f;
     }
 
     audio_output->audio_channels[0] = samples;
+
+    // Output timestamp for audio sync
+    if (ts_out) *ts_out = os_gettime_ns();
 
     return true;
 }
