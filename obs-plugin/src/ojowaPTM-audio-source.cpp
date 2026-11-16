@@ -303,7 +303,7 @@ static void initialize_source_info() {
     ojowaptm_audio_source_info.get_name = ojowaptm_audio_get_name;
     ojowaptm_audio_source_info.create = ojowaptm_audio_create;
     ojowaptm_audio_source_info.destroy = ojowaptm_audio_destroy;
-    ojowaptm_audio_source_info.render_audio = ojowaptm_audio_render;
+    ojowaptm_audio_source_info.audio_render = ojowaptm_audio_render;
     ojowaptm_audio_source_info.get_properties = ojowaptm_audio_properties;
 }
 
