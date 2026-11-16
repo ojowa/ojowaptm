@@ -1,7 +1,12 @@
 #pragma once
 
-#include <obs-module.h>
-#include <obs.h>
+#if defined(_WIN32)
+# define OBS_MODULE_API __declspec(dllexport)
+# include <obs.h>
+#else
+# include <obs-module.h>
+# include <obs.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
