@@ -13,10 +13,25 @@
 #include <vector>
 #include <cstring>
 #include <cstdint>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <unistd.h>
-#include <fcntl.h>
+
+#ifdef _WIN32
+# include <winsock2.h>
+# include <ws2tcpip.h>
+# pragma comment(lib, "ws2_32.lib")
+# define SOCK_ERRNO WSAGetLastError()
+# define SOCK_EINTR WSAEINTR
+# define SOCK_EWOULDBLOCK WSAEWOULDBLOCK
+# define SOCK_CLOSE closesocket
+#else
+# include <sys/socket.h>
+# include <netinet/in.h>
+# include <unistd.h>
+# include <fcntl.h>
+# define SOCK_ERRNO errno
+# define SOCK_EINTR EINTR
+# define SOCK_EWOULDBLOCK EWOULDBLOCK
+# define SOCK_CLOSE close
+#endif
 
 static const uint16_t OBS_PORT = 8765;
 static const char *OBS_SOURCE_ID = "ojowaptm_audio_source";
@@ -38,23 +53,45 @@ struct ojowaptm_audio_data {
     uint32_t channels = 1;
 };
 
+#ifdef _WIN32
+static int set_nonblocking(SOCKET fd) {
+    u_long nonblocking = 1;
+    return ioctlsocket(fd, FIONBIO, &nonblocking);
+}
+#else
 static int set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) return -1;
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
+#endif
 
 static void *net_thread_proc(void *param) {
     ojowaptm_audio_data *data = static_cast<ojowaptm_audio_data *>(param);
 
+#ifdef _WIN32
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        blog(LOG_ERROR, "ojowaPTM: WSAStartup failed");
+        return nullptr;
+    }
+#endif
+
+#ifdef _WIN32
+    SOCKET server_fd = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
+#else
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd < 0) {
+#endif
+    if (server_fd < 0 || server_fd == INVALID_SOCKET) {
         blog(LOG_ERROR, "ojowaPTM: failed to create socket");
+#ifdef _WIN32
+        WSACleanup();
+#endif
         return nullptr;
     }
 
     int opt = 1;
-    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(opt));
     set_nonblocking(server_fd);
 
     sockaddr_in addr{};
@@ -64,13 +101,19 @@ static void *net_thread_proc(void *param) {
 
     if (bind(server_fd, (sockaddr *)&addr, sizeof(addr)) < 0) {
         blog(LOG_ERROR, "ojowaPTM: bind failed on port %d", OBS_PORT);
-        close(server_fd);
+        SOCK_CLOSE(server_fd);
+#ifdef _WIN32
+        WSACleanup();
+#endif
         return nullptr;
     }
 
     if (listen(server_fd, 1) < 0) {
         blog(LOG_ERROR, "ojowaPTM: listen failed");
-        close(server_fd);
+        SOCK_CLOSE(server_fd);
+#ifdef _WIN32
+        WSACleanup();
+#endif
         return nullptr;
     }
 
@@ -85,16 +128,16 @@ static void *net_thread_proc(void *param) {
         timeout.tv_sec = 0;
         timeout.tv_usec = 200000;
 
-        int activity = select(server_fd + 1, &readfds, nullptr, nullptr, &timeout);
+        int activity = select((int)server_fd + 1, &readfds, nullptr, nullptr, &timeout);
         if (activity < 0) {
-            if (errno == EINTR) continue;
+            if (SOCK_ERRNO == SOCK_EINTR) continue;
             break;
         }
         if (activity == 0) continue;
 
         if (FD_ISSET(server_fd, &readfds)) {
-            int client_fd = accept(server_fd, nullptr, nullptr);
-            if (client_fd < 0) continue;
+            SOCKET client_fd = accept(server_fd, nullptr, nullptr);
+            if (client_fd < 0 || client_fd == INVALID_SOCKET) continue;
 
             set_nonblocking(client_fd);
             blog(LOG_INFO, "ojowaPTM: phone connected");
@@ -109,12 +152,12 @@ static void *net_thread_proc(void *param) {
                     FD_SET(client_fd, &r);
                     timeout.tv_sec = 0;
                     timeout.tv_usec = 200000;
-                    int sel = select(client_fd + 1, &r, nullptr, nullptr, &timeout);
+                    int sel = select((int)client_fd + 1, &r, nullptr, nullptr, &timeout);
                     if (sel <= 0) continue;
 
                     ssize_t n = recv(client_fd, reinterpret_cast<char *>(header + header_offset), 10 - header_offset, 0);
                     if (n <= 0) {
-                        if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+                        if (SOCK_ERRNO == SOCK_EWOULDBLOCK || SOCK_ERRNO == SOCK_EAGAIN) continue;
                         goto disconnect;
                     }
                     header_offset += (size_t)n;
@@ -140,12 +183,12 @@ static void *net_thread_proc(void *param) {
                     FD_SET(client_fd, &r);
                     timeout.tv_sec = 0;
                     timeout.tv_usec = 200000;
-                    int sel = select(client_fd + 1, &r, nullptr, nullptr, &timeout);
+                    int sel = select((int)client_fd + 1, &r, nullptr, nullptr, &timeout);
                     if (sel <= 0) continue;
 
                     ssize_t n = recv(client_fd, reinterpret_cast<char *>(buf), sizeof(buf), 0);
                     if (n <= 0) {
-                        if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+                        if (SOCK_ERRNO == SOCK_EWOULDBLOCK || SOCK_ERRNO == SOCK_EAGAIN) continue;
                         goto disconnect;
                     }
 
@@ -159,12 +202,15 @@ static void *net_thread_proc(void *param) {
             }
 
         disconnect:
-            close(client_fd);
+            SOCK_CLOSE(client_fd);
             blog(LOG_INFO, "ojowaPTM: phone disconnected");
         }
     }
 
-    close(server_fd);
+    SOCK_CLOSE(server_fd);
+#ifdef _WIN32
+    WSACleanup();
+#endif
     return nullptr;
 }
 
