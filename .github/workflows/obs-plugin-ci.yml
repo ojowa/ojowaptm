@@ -44,7 +44,7 @@ jobs:
 
       - name: Clone OBS Studio SDK
         run: |
-          git clone --depth 1 --shallow-submodules --recurse-submodules --branch ${{ env.OBS_VERSION }} https://github.com/obsproject/obs-studio.git obs-studio
+          git clone --depth 1 --recurse-submodules --branch ${{ env.OBS_VERSION }} https://github.com/obsproject/obs-studio.git obs-studio
 
       - name: Install OBS dependencies
         shell: pwsh
