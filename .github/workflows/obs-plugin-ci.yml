@@ -262,7 +262,7 @@ jobs:
       - name: Build OjowaPTM OBS Plugin (Windows)
         shell: pwsh
         run: |
-          cmake --build --preset windows-x64 --target ojowaptm-obs --config Release
+          cmake --build --preset windows-x64 -S obs-plugin -B obs-plugin/build --target ojowaptm-obs --config Release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Write-Host "OjowaPTM plugin build complete"
 
