@@ -26,7 +26,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   NODE_VERSION: '20'
@@ -81,30 +81,13 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Install dependencies
-        run: npm install --legacy-peer-deps
-
-      - name: Verify react-native react.gradle
         run: |
-          # In React Native 0.73+, react.gradle may be at package root or ReactAndroid/
-          if [ -f node_modules/react-native/react.gradle ] || [ -f node_modules/react-native/ReactAndroid/react.gradle ]; then
-            echo "react.gradle found"
-          else
-            echo "react.gradle not found, reinstalling react-native..."
-            npm install react-native@0.73.6 --legacy-peer-deps
-          fi
-          if [ ! -f node_modules/react-native/react.gradle ] && [ ! -f node_modules/react-native/ReactAndroid/react.gradle ]; then
-            echo "ERROR: react.gradle not found in react-native package"
-            ls node_modules/react-native/ 2>/dev/null || echo "node_modules/react-native does not exist"
-            exit 1
-          fi
-          echo "react-native is ready for Gradle build"
+          rm -rf node_modules package-lock.json
+          npm install --legacy-peer-deps
 
-      - name: Install Gradle via SDKMAN
+      - name: Generate native Android project (Expo prebuild)
         run: |
-          curl -s "https://get.sdkman.io" | bash
-          source "$HOME/.sdkman/bin/sdkman-init.sh"
-          sdk install gradle ${{ env.GRADLE_VERSION }}
-          echo "GRADLE_USER_HOME=$HOME/.gradle" >> $GITHUB_ENV
+          npx expo prebuild --platform android --clean
 
       - name: Decode Android release keystore (optional)
         env:
@@ -122,8 +105,7 @@ jobs:
       - name: Build Android Debug APK
         working-directory: android
         run: |
-          source "$HOME/.sdkman/bin/sdkman-init.sh"
-          gradle assembleDebug
+          ./gradlew assembleDebug
 
       - name: Build Android Release APK and AAB (optional)
         env:
@@ -138,11 +120,8 @@ jobs:
             echo "KEY_ALIAS=$KEY_ALIAS" >> $GITHUB_ENV
             echo "KEY_PASSWORD=$KEY_PASSWORD" >> $GITHUB_ENV
             echo "ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD" >> $GITHUB_ENV
-            source "$HOME/.sdkman/bin/sdkman-init.sh"
-            gradle assembleRelease bundleRelease
+            ./gradlew assembleRelease bundleRelease
           else
-            echo "Skipping release build — no keystore configured"
-          fi
             echo "Skipping release build — no keystore configured"
           fi
 
@@ -251,7 +230,9 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Install dependencies
-        run: npm install --legacy-peer-deps
+        run: |
+          rm -rf node_modules package-lock.json
+          npm install --legacy-peer-deps
 
       - name: Run ESLint
         run: npx eslint . --ext .ts,.tsx,.js --max-warnings 0 || true
