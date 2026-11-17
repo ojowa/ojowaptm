@@ -85,16 +85,19 @@ jobs:
 
       - name: Verify react-native react.gradle
         run: |
-          if [ ! -f node_modules/react-native/react.gradle ]; then
+          # In React Native 0.73+, react.gradle may be at package root or ReactAndroid/
+          if [ -f node_modules/react-native/react.gradle ] || [ -f node_modules/react-native/ReactAndroid/react.gradle ]; then
+            echo "react.gradle found"
+          else
             echo "react.gradle not found, reinstalling react-native..."
             npm install react-native@0.73.6 --legacy-peer-deps
           fi
-          if [ ! -f node_modules/react-native/react.gradle ]; then
-            echo "ERROR: node_modules/react-native/react.gradle still missing after reinstall"
+          if [ ! -f node_modules/react-native/react.gradle ] && [ ! -f node_modules/react-native/ReactAndroid/react.gradle ]; then
+            echo "ERROR: react.gradle not found in react-native package"
             ls node_modules/react-native/ 2>/dev/null || echo "node_modules/react-native does not exist"
             exit 1
           fi
-          echo "react.gradle found at node_modules/react-native/react.gradle"
+          echo "react-native is ready for Gradle build"
 
       - name: Install Gradle via SDKMAN
         run: |
