@@ -38,8 +38,7 @@
       "favicon": "./assets/icon.png"
     },
     "plugins": [
-      "expo-av",
-      "expo-keep-awake"
+      "expo-av"
     ]
   }
 }

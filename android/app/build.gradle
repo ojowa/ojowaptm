@@ -1,13 +1,14 @@
-apply plugin: "com.android.application"
-apply plugin: "com.facebook.react"
+plugins {
+    id "com.android.application"
+}
 
 import com.android.build.OutputFile
 
-project.ext.react = [
-    entryFile: "index.js",
-    enableHermes: false,
-    cliPath: "../node_modules/@react-native-community/cli",
-]
+apply plugin: "com.facebook.react"
+
+react {
+    entryFile = file("index.js")
+}
 
 android {
     ndkVersion rootProject.ext.ndkVersion
