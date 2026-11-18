@@ -99,8 +99,8 @@ jobs:
         run: |
           if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
             mkdir -p android/app
-            echo "${ANDROID_KEYSTORE_BASE64}" | base64 -d > android/app/ojowaptm-upload-keystore.jks
-            echo "ANDROID_KEYSTORE_PATH=$GITHUB_WORKSPACE/android/app/ojowaptm-upload-keystore.jks" >> $GITHUB_ENV
+            echo "${ANDROID_KEYSTORE_BASE64}" | base64 -d > android/app/ojowaptm-release-key.jks
+            echo "ANDROID_KEYSTORE_PATH=$GITHUB_WORKSPACE/android/app/ojowaptm-release-key.jks" >> $GITHUB_ENV
             echo "Release keystore decoded"
           else
             echo "No release keystore provided — debug build only"
@@ -254,4 +254,4 @@ jobs:
           npm install --legacy-peer-deps
 
       - name: Run ESLint
-        run: npx eslint . --ext .ts,.tsx,.js --max-warnings 0 || true
+        run: npx eslint . --ext .ts,.tsx,.js
