@@ -3,7 +3,7 @@
  * Phone as Mic: stream your Android microphone to OBS over WiFi.
  */
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -14,14 +14,50 @@ import {
   TextInput,
   ActivityIndicator,
   Alert,
+  StatusBar,
+  Platform,
 } from 'react-native';
-import { StatusBar } from 'expo-status-bar';
-import { KeepAwake } from 'expo-keep-awake';
-import * as Network from 'expo-network';
 import { AudioCaptureService } from '../services/AudioCaptureService';
 import { WiFiStreamService } from '../services/WiFiStreamService';
 import type { AudioConfig, AudioSource, ObsConnection, StreamState } from '../types';
 import { DEFAULT_AUDIO_CONFIG, DEFAULT_OBS_PORT, AUDIO_SOURCE_OPTIONS } from '../types';
+
+// Custom keep-awake hook using native Wakelock
+const useKeepAwake = (enabled: boolean) => {
+  const wakeLockRef = useRef<any>(null);
+  
+  useEffect(() => {
+    if (Platform.OS === 'android' && enabled) {
+      // Acquire wake lock via native module
+      const PowerManager = require('react-native').NativeModules.PowerManager;
+      if (PowerManager && PowerManager.acquireWakeLock) {
+        PowerManager.acquireWakeLock();
+        wakeLockRef.current = true;
+      }
+    }
+    
+    return () => {
+      if (wakeLockRef.current) {
+        const PowerManager = require('react-native').NativeModules.PowerManager;
+        if (PowerManager && PowerManager.releaseWakeLock) {
+          PowerManager.releaseWakeLock();
+        }
+        wakeLockRef.current = null;
+      }
+    };
+  }, [enabled]);
+};
+
+// Get local IP address using react-native's native bridge
+const getIpAddress = async (): Promise<string> => {
+  if (Platform.OS === 'android') {
+    const NetworkInfo = require('react-native').NativeModules.NetworkInfo;
+    if (NetworkInfo && NetworkInfo.getIpAddress) {
+      return await NetworkInfo.getIpAddress();
+    }
+  }
+  return 'unknown';
+};
 
 export default function HomeScreen() {
   const [config, setConfig] = useState<AudioConfig>(DEFAULT_AUDIO_CONFIG);
@@ -105,7 +141,7 @@ export default function HomeScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const ip = await Network.getIpAddressAsync();
+        const ip = await getIpAddress();
         setIpAddress(ip);
       } catch {
         setIpAddress('unknown');
@@ -129,10 +165,11 @@ export default function HomeScreen() {
     },
     []
   );
+  useKeepAwake(state.isStreaming);
+
   return (
-    <KeepAwake keepAwake={state.isStreaming}>
-      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-        <StatusBar style="light" />
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <StatusBar barStyle="light-content" />
 
         <View style={styles.header}>
           <Text style={styles.title}>ojowaPTM</Text>
@@ -231,8 +268,7 @@ export default function HomeScreen() {
           <ActivityIndicator size="large" color="#0a84ff" style={styles.spinner} />
         )}
       </ScrollView>
-    </KeepAwake>
-  );
+    );
 }
 
 const styles = StyleSheet.create({
