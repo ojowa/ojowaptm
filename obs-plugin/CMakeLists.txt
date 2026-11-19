@@ -8,6 +8,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(OBS_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../obs-studio/libobs")
 # Generated obsconfig.h (included by obs-config.h) is written to the OBS build tree
 set(OBS_CONFIG_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../obs-studio/build/config")
+# w32-pthreads headers (pthread.h) required by libobs/util/threading.h on Windows
+set(OBS_W32_PTHREADS_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../obs-studio/deps/w32-pthreads")
 
 # Find obs.lib using CMAKE_PREFIX_PATH (set to obs-install) plus explicit fallbacks
 find_library(OBS_LIBRARY NAMES obs.lib
@@ -25,7 +27,7 @@ endif()
 message(STATUS "Found OBS headers at ${OBS_INCLUDE_DIR}")
 message(STATUS "Found OBS library at ${OBS_LIBRARY}")
 
-include_directories("${CMAKE_SOURCE_DIR}/include" "${OBS_INCLUDE_DIR}" "${OBS_CONFIG_INCLUDE_DIR}")
+include_directories("${CMAKE_SOURCE_DIR}/include" "${OBS_INCLUDE_DIR}" "${OBS_CONFIG_INCLUDE_DIR}" "${OBS_W32_PTHREADS_INCLUDE_DIR}")
 
 add_library(ojowaPTM-obs MODULE
     src/ojowaPTM-audio-source.cpp
