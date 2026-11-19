@@ -236,7 +236,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.RELEASE_VERSION }}
-          release_name: "ojowaPTM Android v${{ env.RELEASE_VERSION }}"
+          name: "ojowaPTM Android v${{ env.RELEASE_VERSION }}"
           body: |
             ## ojowaPTM Android v${{ env.RELEASE_VERSION }}
 
