@@ -262,7 +262,7 @@ jobs:
       - name: Build OjowaPTM OBS Plugin (Windows)
         shell: pwsh
         run: |
-          cmake --build --preset windows-x64 -S obs-plugin -B obs-plugin/build --target ojowaptm-obs --config Release
+          cmake --build obs-plugin/build --target ojowaPTM-obs --config Release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Write-Host "OjowaPTM plugin build complete"
 
@@ -275,7 +275,7 @@ jobs:
         run: |
           $certPath = "$env:RUNNER_TEMP/ojowaptm-signing-cert.pfx"
           [System.IO.File]::WriteAllBytes($certPath, [System.Convert]::FromBase64String($env:WINDOWS_SIGNING_CERT))
-          $dllPath = Get-ChildItem -Path "obs-plugin/build/bin/64bit" -Filter "ojowaptm-obs.dll" -Recurse | Select-Object -First 1
+          $dllPath = Get-ChildItem -Path "obs-plugin/build" -Filter "ojowaPTM-obs.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($dllPath) {
             & signtool sign /f $certPath /p $env:WINDOWS_SIGNING_CERT_PASSWORD /t http://timestamp.digicert.com /v $dllPath.FullName
             Write-Host "Windows OBS plugin signed successfully"
@@ -283,50 +283,36 @@ jobs:
             Write-Host "No DLL found to sign"
           }
 
-      - name: Download FFmpeg development build (Windows)
+      - name: Install WiX Toolset (dotnet global tool)
         shell: pwsh
         run: |
-          # Shared (LGPL) FFmpeg n8.1: headers + import libs for configure,
-          # runtime DLLs for staging next to the plugin (find via .deps/ffmpeg).
-          $ffmpegBuild = 'ffmpeg-n8.1-latest-win64-lgpl-shared-8.1'
-          $ffmpegArchive = Join-Path $env:RUNNER_TEMP "$ffmpegBuild.zip"
-          Invoke-WebRequest `
-            -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$ffmpegBuild.zip" `
-            -OutFile $ffmpegArchive
-          $extractPath = Join-Path $env:RUNNER_TEMP 'ffmpeg-extract'
-          Expand-Archive -Path $ffmpegArchive -DestinationPath $extractPath -Force
-          $inner = Get-ChildItem $extractPath -Directory | Select-Object -First 1
-          if (-not $inner) { throw 'FFmpeg archive extraction failed' }
-          $dest = Join-Path $env:GITHUB_WORKSPACE '.deps/ffmpeg'
-          New-Item -ItemType Directory -Force -Path $dest | Out-Null
-          foreach ($sub in 'include', 'lib', 'bin') {
-            Copy-Item -Recurse -Force (Join-Path $inner.FullName $sub) $dest
-          }
-          if (-not (Test-Path (Join-Path $dest 'include/libavcodec/avcodec.h'))) { throw 'FFmpeg include staging failed' }
-          if (-not (Test-Path (Join-Path $dest 'lib/avcodec.lib'))) { throw 'FFmpeg import lib staging failed' }
-          Write-Host "Staged FFmpeg development build to $dest"
+          dotnet tool install --global wix
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $wixTools = Join-Path $env:APPDATA 'dotnet\tools'
+          Add-Content -Path $env:GITHUB_PATH -Value $wixTools
+          $env:Path = "$wixTools;$env:Path"
+          wix --version
 
-      - name: Package MSI (WiX v7)
+      - name: Package MSI (WiX)
         id: package
         shell: pwsh
         run: |
-          $wixBin = "$env:ProgramFiles\WiX Toolset v7.0\bin"
           $pluginDll = Join-Path $env:GITHUB_WORKSPACE 'obs-plugin/build/Release/ojowaPTM-obs.dll'
           if (-not (Test-Path $pluginDll)) {
-            $pluginDll = Get-ChildItem -Path "$env:GITHUB_WORKSPACE/obs-plugin/build" -Filter "ojowaptm-obs.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-            if (-not $pluginDll) { throw 'OBS plugin DLL was not built.' }
-            $pluginDll = $pluginDll.FullName
+            $found = Get-ChildItem -Path "$env:GITHUB_WORKSPACE/obs-plugin/build" -Filter "ojowaPTM-obs.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $found) { throw 'OBS plugin DLL was not built.' }
+            $pluginDll = $found.FullName
           }
           Write-Host "Plugin DLL: $pluginDll"
 
           $pluginStage = Join-Path $env:RUNNER_TEMP 'ojowaptm-obs-plugin-msi'
-          New-Item -ItemType Directory -Force -Path (Join-Path $pluginStage 'bin/64bit') | Out-Null
-          Copy-Item -LiteralPath $pluginDll -Destination (Join-Path $pluginStage 'bin/64bit/ojowaptm-obs.dll') -Force
+          New-Item -ItemType Directory -Force -Path $pluginStage | Out-Null
+          Copy-Item -LiteralPath $pluginDll -Destination (Join-Path $pluginStage 'ojowaptm-obs.dll') -Force
 
           $msiPath = Join-Path $env:GITHUB_WORKSPACE "obs-plugin/build/${env:MSI_OUTPUT_NAME}"
-          & "$wixBin\wix.exe" build `
+          wix build `
             "obs-plugin/ojowaptm-obs-plugin.wxs" `
-            -dPluginTargetDir="$pluginStage/bin/64bit/" `
+            -d PluginTargetDir="$pluginStage" `
             -out $msiPath 2>&1 | Select-Object -Last 8
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -374,7 +360,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_VERSION }}
-          release_name: "ojowaPTM OBS Plugin ${{ env.RELEASE_VERSION }}"
+          name: "ojowaPTM OBS Plugin ${{ env.RELEASE_VERSION }}"
           body: |
             ## ojowaPTM OBS Microphone Plugin v${{ env.RELEASE_VERSION }}
 

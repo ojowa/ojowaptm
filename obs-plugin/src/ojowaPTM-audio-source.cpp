@@ -34,6 +34,9 @@
 #include <cstring>
 #include <cstdint>
 
+// Required libobs module exports (obs_module_set_pointer / obs_module_ver).
+OBS_DECLARE_MODULE()
+
 #ifdef _WIN32
 # include <winsock2.h>
 # pragma comment(lib, "ws2_32.lib")
