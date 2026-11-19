@@ -5,8 +5,6 @@ dist/
 build/
 android/app/build/
 android/.gradle/
-android/gradlew
-android/gradlew.bat
 android/local.properties
 android/keystore.jks
 android/key.properties
