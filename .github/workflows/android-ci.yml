@@ -107,7 +107,7 @@ jobs:
           fi
 
       - name: Build Android Debug APK
-        run: cd android && ./gradlew assembleDebug
+        run: cd ${{ github.workspace }}/android && ./gradlew assembleDebug
 
       - name: Build Android Release APK and AAB (optional)
         env:
@@ -116,7 +116,7 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          cd android
+          cd ${{ github.workspace }}/android
           if [ -n "$ANDROID_KEYSTORE_PATH" ]; then
             echo "ANDROID_KEYSTORE_PATH=$ANDROID_KEYSTORE_PATH" >> $GITHUB_ENV
             echo "KEY_ALIAS=$KEY_ALIAS" >> $GITHUB_ENV
@@ -131,22 +131,22 @@ jobs:
         run: |
           mkdir -p ci-output/apk/publish ci-output/apk-release/publish ci-output/aab/publish
           # Debug APKs (split by architecture)
-          cp android/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk ci-output/apk/publish/app-arm64-v8a-debug.apk 2>/dev/null || true
-          cp android/app/build/outputs/apk/debug/app-armeabi-v7a-debug.apk ci-output/apk/publish/app-armeabi-v7a-debug.apk 2>/dev/null || true
-          cp android/app/build/outputs/apk/debug/app-x86-debug.apk ci-output/apk/publish/app-x86-debug.apk 2>/dev/null || true
-          cp android/app/build/outputs/apk/debug/app-x86_64-debug.apk ci-output/apk/publish/app-x86_64-debug.apk 2>/dev/null || true
+          cp ${{ github.workspace }}/android/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk ci-output/apk/publish/app-arm64-v8a-debug.apk 2>/dev/null || true
+          cp ${{ github.workspace }}/android/app/build/outputs/apk/debug/app-armeabi-v7a-debug.apk ci-output/apk/publish/app-armeabi-v7a-debug.apk 2>/dev/null || true
+          cp ${{ github.workspace }}/android/app/build/outputs/apk/debug/app-x86-debug.apk ci-output/apk/publish/app-x86-debug.apk 2>/dev/null || true
+          cp ${{ github.workspace }}/android/app/build/outputs/apk/debug/app-x86_64-debug.apk ci-output/apk/publish/app-x86_64-debug.apk 2>/dev/null || true
           # Fallback to universal debug APK if split APKs not found
-          cp android/app/build/outputs/apk/debug/app-debug.apk ci-output/apk/publish/app-debug.apk 2>/dev/null || true
+          cp ${{ github.workspace }}/android/app/build/outputs/apk/debug/app-debug.apk ci-output/apk/publish/app-debug.apk 2>/dev/null || true
           # Release APKs (split by architecture)
-          if [ -f android/app/build/outputs/apk/release/app-arm64-v8a-release.apk ]; then
-            cp android/app/build/outputs/apk/release/app-arm64-v8a-release.apk ci-output/apk-release/publish/
-            cp android/app/build/outputs/apk/release/app-armeabi-v7a-release.apk ci-output/apk-release/publish/
-            cp android/app/build/outputs/apk/release/app-x86-release.apk ci-output/apk-release/publish/
-            cp android/app/build/outputs/apk/release/app-x86_64-release.apk ci-output/apk-release/publish/
+          if [ -f ${{ github.workspace }}/android/app/build/outputs/apk/release/app-arm64-v8a-release.apk ]; then
+            cp ${{ github.workspace }}/android/app/build/outputs/apk/release/app-arm64-v8a-release.apk ci-output/apk-release/publish/
+            cp ${{ github.workspace }}/android/app/build/outputs/apk/release/app-armeabi-v7a-release.apk ci-output/apk-release/publish/
+            cp ${{ github.workspace }}/android/app/build/outputs/apk/release/app-x86-release.apk ci-output/apk-release/publish/
+            cp ${{ github.workspace }}/android/app/build/outputs/apk/release/app-x86_64-release.apk ci-output/apk-release/publish/
           fi
           # Release AAB
-          if [ -f android/app/build/outputs/bundle/release/app-release.aab ]; then
-            cp android/app/build/outputs/bundle/release/app-release.aab ci-output/aab/publish/
+          if [ -f ${{ github.workspace }}/android/app/build/outputs/bundle/release/app-release.aab ]; then
+            cp ${{ github.workspace }}/android/app/build/outputs/bundle/release/app-release.aab ci-output/aab/publish/
           fi
           echo "=== Staged artifacts ==="
           find ci-output -type f
