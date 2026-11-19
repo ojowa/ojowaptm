@@ -4,6 +4,8 @@ on:
   workflow_dispatch:
   push:
     branches: [ main ]
+    tags:
+      - 'v*'
     paths:
       - 'android/**'
       - 'src/**'
@@ -193,9 +195,34 @@ jobs:
 
       - name: Download Debug APK artifact
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           name: ${{ env.APK_ARTIFACT_NAME }}
-          path: ./dist
+          path: ./dist-debug
+
+      - name: Download Release APK artifact
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: ojowaPTM-android-apk-release
+          path: ./dist-release
+
+      - name: Stage APKs for release
+        run: |
+          mkdir -p dist
+          # Prefer signed release APKs; fall back to debug APKs
+          if [ -d dist-release ] && [ -n "$(find dist-release -name '*.apk' -print -quit)" ]; then
+            find dist-release -name '*.apk' -exec cp {} dist/ \;
+            echo "Using signed release APKs"
+          elif [ -d dist-debug ]; then
+            find dist-debug -name '*.apk' -exec cp {} dist/ \;
+            echo "Using debug APKs (no release artifact found)"
+          else
+            echo "No APK artifacts found" >&2
+            exit 1
+          fi
+          echo "=== APKs for release ==="
+          ls -la dist/
 
       - name: Get release version
         shell: pwsh
@@ -228,7 +255,7 @@ jobs:
 
             ### Protocol
             Streams 48kHz s16le mono PCM over TCP port 8765 to the ojowaPTM OBS plugin.
-          files: ./dist/*.apk
+          files: dist/*.apk
           draft: false
           prerelease: false
           fail_on_unmatched_files: true
