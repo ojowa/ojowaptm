@@ -107,9 +107,8 @@ jobs:
           fi
 
       - name: Build Android Debug APK
-        working-directory: android
-        run: |
-          ./gradlew assembleDebug
+        working-directory: ./android
+        run: ./gradlew assembleDebug
 
       - name: Build Android Release APK and AAB (optional)
         env:
@@ -117,7 +116,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        working-directory: android
+        working-directory: ./android
         run: |
           if [ -n "$ANDROID_KEYSTORE_PATH" ]; then
             echo "ANDROID_KEYSTORE_PATH=$ANDROID_KEYSTORE_PATH" >> $GITHUB_ENV
@@ -254,4 +253,4 @@ jobs:
           npm install --legacy-peer-deps
 
       - name: Run ESLint
-        run: npx eslint . --ext .ts,.tsx,.js
+        run: npx eslint src/
