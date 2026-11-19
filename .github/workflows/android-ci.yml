@@ -106,6 +106,9 @@ jobs:
             echo "No release keystore provided — debug build only"
           fi
 
+      - name: Make gradlew executable
+        run: chmod +x ${{ github.workspace }}/android/gradlew
+
       - name: Build Android Debug APK
         run: cd ${{ github.workspace }}/android && ./gradlew assembleDebug
 
