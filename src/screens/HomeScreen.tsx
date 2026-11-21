@@ -77,6 +77,7 @@ export default function HomeScreen() {
   const [ipAddress, setIpAddress] = useState<string>('');
   const [levelInterval, setLevelInterval] = useState<any>(null);
   const [audioSource, setAudioSource] = useState<AudioSource>('mic');
+  const [lastConnectedIP, setLastConnectedIP] = useState<string>('');
 
   const toggleStream = async () => {
     if (state.isStreaming) {
@@ -159,11 +160,14 @@ export default function HomeScreen() {
   const handleStateChange = useCallback(
     ({ connected, error }: { connected: boolean; error: string | null }) => {
       setState((prev) => ({ ...prev, isConnected: connected, error }));
+      if (connected) {
+        setLastConnectedIP(connection.host);
+      }
       if (!connected) {
         setState((prev) => ({ ...prev, isStreaming: false }));
       }
     },
-    []
+    [connection.host]
   );
   useKeepAwake(state.isStreaming);
 
@@ -177,8 +181,27 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Your Phone IP</Text>
-          <Text style={styles.ipText}>{ipAddress}</Text>
+          <View style={styles.statusRow}>
+            <Text style={styles.sectionTitle}>Connection Status</Text>
+            <View style={[
+              styles.statusIndicator,
+              state.isConnected ? styles.statusConnected : styles.statusDisconnected
+            ]}>
+              <Text style={styles.statusText}>
+                {state.isConnected ? 'Connected' : 'Disconnected'}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.statusRow}>
+            <Text style={styles.sectionTitle}>Your Phone IP</Text>
+            <Text style={styles.ipText}>{ipAddress}</Text>
+          </View>
+          {lastConnectedIP && (
+            <View style={styles.statusRow}>
+              <Text style={styles.sectionTitle}>Last Connected To</Text>
+              <Text style={styles.ipText}>{lastConnectedIP}:{DEFAULT_OBS_PORT}</Text>
+            </View>
+          )}
           <Text style={styles.ipHint}>
             Enter the OBS PC IP below to stream to it
           </Text>
@@ -188,7 +211,7 @@ export default function HomeScreen() {
           <Text style={styles.sectionTitle}>OBS PC (WiFi)</Text>
           <TextInput
             style={styles.input}
-            placeholder="OBS PC IP address"
+            placeholder="OBS PC IP address (e.g., 192.168.1.100)"
             value={connection.host}
             onChangeText={updateHost}
             autoCapitalize="none"
@@ -424,6 +447,34 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     marginTop: 8,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  statusIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  statusConnected: {
+    backgroundColor: '#1a3d2e',
+    borderWidth: 1,
+    borderColor: '#30d158',
+  },
+  statusDisconnected: {
+    backgroundColor: '#3d1a1a',
+    borderWidth: 1,
+    borderColor: '#ff453a',
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#ffffff',
   },
   sourceRow: {
     flexDirection: 'row',

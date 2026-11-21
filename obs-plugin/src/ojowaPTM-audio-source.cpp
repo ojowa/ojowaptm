@@ -79,6 +79,11 @@ struct ojowaptm_audio_data {
     uint32_t channels = 1;
 
     std::vector<float> render_buffer;
+
+    // Connection status tracking
+    std::atomic<bool> client_connected{false};
+    std::string connected_ip;
+    uint16_t listen_port = 8765;
 };
 
 #ifdef _WIN32
@@ -105,6 +110,9 @@ static void *net_thread_proc(void *param) {
     }
 #endif
 
+    // Read port from settings (default 8765)
+    uint16_t listen_port = data->listen_port ? data->listen_port : OBS_PORT;
+
 #ifdef _WIN32
     SOCKET server_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 #else
@@ -129,10 +137,10 @@ static void *net_thread_proc(void *param) {
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(OBS_PORT);
+    addr.sin_port = htons(listen_port);
 
     if (bind(server_fd, (sockaddr *)&addr, sizeof(addr)) < 0) {
-        blog(LOG_ERROR, "ojowaPTM: bind failed on port %d", OBS_PORT);
+        blog(LOG_ERROR, "ojowaPTM: bind failed on port %d", listen_port);
         SOCK_CLOSE(server_fd);
 #ifdef _WIN32
         WSACleanup();
@@ -149,7 +157,7 @@ static void *net_thread_proc(void *param) {
         return nullptr;
     }
 
-    blog(LOG_INFO, "ojowaPTM: listening on port %d", OBS_PORT);
+    blog(LOG_INFO, "ojowaPTM: listening on port %d", listen_port);
 
     fd_set readfds;
     timeval timeout;
@@ -173,6 +181,33 @@ static void *net_thread_proc(void *param) {
 
             set_nonblocking(client_fd);
             blog(LOG_INFO, "ojowaPTM: phone connected");
+
+            // Get client IP address
+            sockaddr_in client_addr{};
+#ifdef _WIN32
+            int client_addr_len = sizeof(client_addr);
+#else
+            socklen_t client_addr_len = sizeof(client_addr);
+#endif
+            getpeername(client_fd, (sockaddr *)&client_addr, &client_addr_len);
+            char client_ip[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
+            
+            // Update connection status
+            data->client_connected.store(true);
+            data->connected_ip = client_ip;
+            
+            // Update OBS source properties to show connection status
+            obs_source_t *source = data->source;
+            if (source) {
+                obs_data_t *settings = obs_source_get_settings(source);
+                obs_data_set_string(settings, "connection_status", "Connected");
+                obs_data_set_string(settings, "connected_ip", client_ip);
+                obs_source_update(source, settings);
+                obs_data_release(settings);
+            }
+            
+            blog(LOG_INFO, "ojowaPTM: phone connected from %s", client_ip);
 
             uint8_t header[10];
 
@@ -237,6 +272,20 @@ static void *net_thread_proc(void *param) {
         disconnect:
             SOCK_CLOSE(client_fd);
             blog(LOG_INFO, "ojowaPTM: phone disconnected");
+            
+            // Update connection status
+            data->client_connected.store(false);
+            data->connected_ip.clear();
+            
+            // Update OBS source properties to show disconnected
+            obs_source_t *source = data->source;
+            if (source) {
+                obs_data_t *settings = obs_source_get_settings(source);
+                obs_data_set_string(settings, "connection_status", "Disconnected");
+                obs_data_set_string(settings, "connected_ip", "");
+                obs_source_update(source, settings);
+                obs_data_release(settings);
+            }
         }
     }
 
@@ -305,10 +354,29 @@ static bool ojowaptm_audio_render(void *data, uint64_t *ts_out,
     return true;
 }
 
+static void ojowaptm_audio_update(void *data, obs_data_t *settings) {
+    auto *d = static_cast<ojowaptm_audio_data *>(data);
+    if (obs_data_has_user_value(settings, "listen_port")) {
+        d->listen_port = static_cast<uint16_t>(obs_data_get_int(settings, "listen_port"));
+    }
+}
+
 static obs_properties_t *ojowaptm_audio_properties(void *data) {
     UNUSED_PARAMETER(data);
     obs_properties_t *props = obs_properties_create();
+    
+    // Connection status display
+    obs_properties_add_text(props, "connection_status", "Connection Status", OBS_TEXT_INFO);
+    
+    // Connected phone IP display
+    obs_properties_add_text(props, "connected_ip", "Connected Phone IP", OBS_TEXT_INFO);
+    
+    // Port configuration (default 8765)
+    obs_properties_add_int(props, "listen_port", "Listen Port", 1024, 65535, 1);
+    
+    // Device ID (for identification)
     obs_properties_add_text(props, "device_id", "Device ID", OBS_TEXT_DEFAULT);
+    
     return props;
 }
 
@@ -328,6 +396,7 @@ static void initialize_source_info() {
     ojowaptm_audio_source_info.destroy = ojowaptm_audio_destroy;
     ojowaptm_audio_source_info.audio_render = ojowaptm_audio_render;
     ojowaptm_audio_source_info.get_properties = ojowaptm_audio_properties;
+    ojowaptm_audio_source_info.update = ojowaptm_audio_update;
 }
 
 bool obs_module_load(void) {
