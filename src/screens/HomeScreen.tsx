@@ -19,8 +19,13 @@ import {
 } from 'react-native';
 import { AudioCaptureService } from '../services/AudioCaptureService';
 import { WiFiStreamService } from '../services/WiFiStreamService';
-import type { AudioConfig, AudioSource, ObsConnection, StreamState } from '../types';
+import type { AudioConfig, AudioSource, ObsConnection, StreamState, ObsServerInfo } from '../types';
 import { DEFAULT_AUDIO_CONFIG, DEFAULT_OBS_PORT, AUDIO_SOURCE_OPTIONS } from '../types';
+
+// UDP broadcast discovery for OBS PC
+const DISCOVERY_PORT = 8766;
+const DISCOVERY_MAGIC = 'OPTM_DISCOVER';
+const DISCOVERY_RESPONSE_MAGIC = 'OPTM_DISC_RESP';
 
 // Custom keep-awake hook using native Wakelock
 const useKeepAwake = (enabled: boolean) => {
@@ -78,6 +83,8 @@ export default function HomeScreen() {
   const [levelInterval, setLevelInterval] = useState<any>(null);
   const [audioSource, setAudioSource] = useState<AudioSource>('mic');
   const [lastConnectedIP, setLastConnectedIP] = useState<string>('');
+  const [discoveredServers, setDiscoveredServers] = useState<ObsServerInfo[]>([]);
+  const [isDiscovering, setIsDiscovering] = useState(false);
 
   const toggleStream = async () => {
     if (state.isStreaming) {
@@ -157,6 +164,72 @@ export default function HomeScreen() {
     };
   }, []);
 
+  // Auto-discovery of OBS PC on local network
+  const discoverObsServers = useCallback(async () => {
+    setIsDiscovering(true);
+    setDiscoveredServers([]);
+
+    return new Promise<void>((resolve) => {
+      const dgram = require('dgram');
+      const socket = dgram.createSocket('udp4');
+      const discovered: ObsServerInfo[] = [];
+
+      socket.on('error', (err: any) => {
+        console.error('Discovery socket error:', err);
+      });
+
+      socket.on('listening', () => {
+        socket.setBroadcast(true);
+        const message = Buffer.from(`${DISCOVERY_MAGIC}|${DEFAULT_OBS_PORT}`);
+        socket.send(message, 0, message.length, DISCOVERY_PORT, '255.255.255.255', (err: any) => {
+          if (err) console.error('Discovery send error:', err);
+        });
+      });
+
+      socket.on('message', (msg: Buffer, rinfo: any) => {
+        try {
+          const response = msg.toString();
+          if (response.startsWith(DISCOVERY_RESPONSE_MAGIC)) {
+            const parts = response.split('|');
+            if (parts.length >= 3) {
+              const port = parseInt(parts[1], 10);
+              const deviceName = parts[2] || 'OBS';
+              const serverInfo: ObsServerInfo = {
+                ip: rinfo.address,
+                port: port,
+                deviceName,
+              };
+              if (!discovered.some(s => s.ip === rinfo.address)) {
+                discovered.push(serverInfo);
+                setDiscoveredServers([...discovered]);
+              }
+            }
+          }
+        } catch (e) {
+          console.error('Discovery parse error:', e);
+        }
+      });
+
+      socket.bind(DISCOVERY_PORT);
+
+      // Timeout after 3 seconds
+      setTimeout(() => {
+        socket.close();
+        setIsDiscovering(false);
+        resolve();
+      }, 3000);
+    });
+  }, []);
+
+  const handleDiscoverPress = useCallback(() => {
+    discoverObsServers().then(() => {
+      if (discoveredServers.length > 0) {
+        const server = discoveredServers[0];
+        setConnection(prev => ({ ...prev, host: server.ip, port: server.port }));
+      }
+    });
+  }, [discoveredServers]);
+
   const handleStateChange = useCallback(
     ({ connected, error }: { connected: boolean; error: string | null }) => {
       setState((prev) => ({ ...prev, isConnected: connected, error }));
@@ -208,7 +281,38 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>OBS PC (WiFi)</Text>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>OBS PC (WiFi)</Text>
+            <TouchableOpacity
+              style={styles.discoverButton}
+              onPress={handleDiscoverPress}
+              disabled={isDiscovering}
+            >
+              <Text style={styles.discoverButtonText}>
+                {isDiscovering ? 'Scanning...' : 'Scan for OBS'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          {isDiscovering && <ActivityIndicator size="small" color="#0a84ff" style={{marginTop: 8}} />}
+          {discoveredServers.length > 0 && (
+            <View style={styles.discoveredList}>
+              <Text style={styles.discoveredTitle}>Discovered OBS Servers:</Text>
+              {discoveredServers.map((server, index) => (
+                <TouchableOpacity
+                  key={index}
+                  style={styles.discoveredItem}
+                  onPress={() => {
+                    setConnection(prev => ({ ...prev, host: server.ip, port: server.port }));
+                  }}
+                >
+                  <View style={styles.discoveredItemInfo}>
+                    <Text style={styles.discoveredItemIp}>{server.ip}:{server.port}</Text>
+                    <Text style={styles.discoveredItemName}>{server.deviceName || 'OBS Studio'}</Text>
+                  </View>
+                  <Text style={styles.discoveredItemArrow}>▶</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           <TextInput
             style={styles.input}
             placeholder="OBS PC IP address (e.g., 192.168.1.100)"
@@ -504,5 +608,65 @@ const styles = StyleSheet.create({
   },
   spinner: {
     marginTop: 16,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  discoverButton: {
+    backgroundColor: '#0a84ff',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  discoverButtonText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  discoveredList: {
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: '#161b22',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#30363d',
+  },
+  discoveredTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#8e93a0',
+    marginBottom: 8,
+  },
+  discoveredItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#0d1117',
+    borderRadius: 8,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#30363d',
+  },
+  discoveredItemInfo: {
+    flex: 1,
+  },
+  discoveredItemIp: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0a84ff',
+    fontFamily: 'monospace',
+  },
+  discoveredItemName: {
+    fontSize: 12,
+    color: '#8e93a0',
+    marginTop: 2,
+  },
+  discoveredItemArrow: {
+    color: '#8e93a0',
+    fontSize: 16,
   },
 });

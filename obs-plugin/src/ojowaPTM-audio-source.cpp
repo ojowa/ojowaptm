@@ -71,6 +71,7 @@ OBS_DECLARE_MODULE()
 #endif
 
 static const uint16_t OBS_PORT = 8765;
+static const uint16_t DISCOVERY_PORT = 8766;
 static const char *OBS_SOURCE_ID = "ojowaptm_audio_source";
 static const char *OBS_SOURCE_NAME = "ojowaPTM Microphone";
 
@@ -306,12 +307,66 @@ static void *net_thread_proc(void *param) {
     return nullptr;
 }
 
+// Get local IP address of the machine
+static std::string get_local_ip() {
+    std::string local_ip = "unknown";
+    
+#ifdef _WIN32
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        return local_ip;
+    }
+    
+    char hostname[256];
+    if (gethostname(hostname, sizeof(hostname)) == 0) {
+        struct hostent *host = gethostbyname(hostname);
+        if (host && host->h_addr_list[0]) {
+            struct in_addr addr;
+            memcpy(&addr, host->h_addr_list[0], sizeof(struct in_addr));
+            char ip_str[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &addr, ip_str, INET_ADDRSTRLEN);
+            local_ip = ip_str;
+        }
+    }
+    WSACleanup();
+#else
+    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd >= 0) {
+        sockaddr_in serv{};
+        serv.sin_family = AF_INET;
+        serv.sin_addr.s_addr = inet_addr("8.8.8.8");
+        serv.sin_port = htons(53);
+        
+        if (connect(sockfd, (struct sockaddr*)&serv, sizeof(serv)) == 0) {
+            sockaddr_in name{};
+            socklen_t namelen = sizeof(name);
+            if (getsockname(sockfd, (struct sockaddr*)&name, &namelen) == 0) {
+                char ip_str[INET_ADDRSTRLEN];
+                inet_ntop(AF_INET, &name.sin_addr, ip_str, INET_ADDRSTRLEN);
+                local_ip = ip_str;
+            }
+        }
+        close(sockfd);
+    }
+#endif
+    
+    return local_ip;
+}
+
 static void *ojowaptm_audio_create(obs_data_t *settings, obs_source_t *source) {
     UNUSED_PARAMETER(settings);
     auto data = new ojowaptm_audio_data();
     data->source = source;
     data->running.store(true);
     data->net_thread = new std::thread(net_thread_proc, data);
+    
+    // Set the OBS PC IP address in the source settings
+    std::string local_ip = get_local_ip();
+    obs_data_t *source_settings = obs_source_get_settings(source);
+    obs_data_set_string(source_settings, "obs_pc_ip", local_ip.c_str());
+    obs_source_update(source, source_settings);
+    obs_data_release(source_settings);
+    
     return data;
 }
 
@@ -374,6 +429,10 @@ static void ojowaptm_audio_update(void *data, obs_data_t *settings) {
 static obs_properties_t *ojowaptm_audio_properties(void *data) {
     UNUSED_PARAMETER(data);
     obs_properties_t *props = obs_properties_create();
+    
+    // OBS PC IP address display (read-only)
+    std::string local_ip = get_local_ip();
+    obs_properties_add_text(props, "obs_pc_ip", "OBS PC IP Address", OBS_TEXT_INFO);
     
     // Connection status display
     obs_properties_add_text(props, "connection_status", "Connection Status", OBS_TEXT_INFO);

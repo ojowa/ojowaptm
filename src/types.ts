@@ -28,6 +28,12 @@ export interface ObsConnection {
   port: number;
 }
 
+export interface ObsServerInfo {
+  ip: string;
+  port: number;
+  deviceName?: string;
+}
+
 export const DEFAULT_AUDIO_CONFIG: AudioConfig = {
   sampleRate: 48000,
   channels: 1,
