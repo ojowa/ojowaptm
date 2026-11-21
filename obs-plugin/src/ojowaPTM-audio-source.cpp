@@ -3,7 +3,9 @@
 #endif
 
 #ifdef _WIN32
+# define _WIN32_WINNT 0x0600
 # include <winsock2.h>
+# include <ws2tcpip.h>
 # pragma comment(lib, "ws2_32.lib")
 # define SOCK_ERRNO WSAGetLastError()
 # define SOCK_EINTR WSAEINTR
@@ -13,9 +15,17 @@
 # ifndef ssize_t
 #   define ssize_t int64_t
 # endif
-#endif
-#ifndef _WIN32_WINNT
-#define _WIN32_WINNT 0x0600
+#else
+# include <sys/socket.h>
+# include <netinet/in.h>
+# include <arpa/inet.h>
+# include <unistd.h>
+# include <fcntl.h>
+# define SOCK_ERRNO errno
+# define SOCK_EINTR EINTR
+# define SOCK_EWOULDBLOCK EWOULDBLOCK
+# define SOCK_EAGAIN EAGAIN
+# define SOCK_CLOSE close
 #endif
 
 #include "ojowaPTM-audio-source.h"
@@ -278,12 +288,12 @@ static void *net_thread_proc(void *param) {
             data->connected_ip.clear();
             
             // Update OBS source properties to show disconnected
-            obs_source_t *source = data->source;
-            if (source) {
-                obs_data_t *settings = obs_source_get_settings(source);
+            obs_source_t *src = data->source;
+            if (src) {
+                obs_data_t *settings = obs_source_get_settings(src);
                 obs_data_set_string(settings, "connection_status", "Disconnected");
                 obs_data_set_string(settings, "connected_ip", "");
-                obs_source_update(source, settings);
+                obs_source_update(src, settings);
                 obs_data_release(settings);
             }
         }
