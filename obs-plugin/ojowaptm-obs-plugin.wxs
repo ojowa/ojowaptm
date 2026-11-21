@@ -1,5 +1,5 @@
 ﻿<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  <Package Name="ojowaPTM OBS Microphone Plugin" Language="1033" Version="1.0.0" Manufacturer="ojowa" UpgradeCode="a1b2c3d4-e5f6-7890-abcd-ef1234567890" Scope="perMachine">
+  <Package Name="ojowaPTM OBS Microphone Plugin" Language="1033" Version="1.0.1" Manufacturer="ojowa" UpgradeCode="a1b2c3d4-e5f6-7890-abcd-ef1234567890" Scope="perMachine">
     <SummaryInformation Description="ojowaPTM OBS Microphone Plugin MSI" Manufacturer="ojowa" />
 
     <MajorUpgrade AllowDowngrades="yes" />
