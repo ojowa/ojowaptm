@@ -53,6 +53,7 @@ export const AUDIO_SOURCE_OPTIONS: { value: AudioSource; label: string }[] = [
 ];
 
 export const DEFAULT_OBS_PORT = 8765;
+export const DEFAULT_DISCOVERY_PORT = 8766;
 
 // Magic header for the TCP stream so OBS can identify the protocol
 export const STREAM_MAGIC = new Uint8Array([0x4F, 0x50, 0x54, 0x4D]); // "OPTM"

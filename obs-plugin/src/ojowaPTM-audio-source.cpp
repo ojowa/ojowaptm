@@ -70,8 +70,8 @@ OBS_DECLARE_MODULE()
 # define SOCK_CLOSE close
 #endif
 
-static const uint16_t OBS_PORT = 8765;
-static const uint16_t DISCOVERY_PORT = 8766;
+static const uint16_t DEFAULT_OBS_PORT = 8765;
+static const uint16_t DEFAULT_DISCOVERY_PORT = 8766;
 static const char *OBS_SOURCE_ID = "ojowaptm_audio_source";
 static const char *OBS_SOURCE_NAME = "ojowaPTM Microphone";
 
@@ -80,6 +80,7 @@ static const uint8_t STREAM_MAGIC[4] = {0x4F, 0x50, 0x54, 0x4D}; // "OPTM"
 struct ojowaptm_audio_data {
     obs_source_t *source;
     std::thread *net_thread;
+    std::thread *discovery_thread;
     std::atomic<bool> running{false};
 
     std::mutex queue_mutex;
@@ -94,7 +95,7 @@ struct ojowaptm_audio_data {
     // Connection status tracking
     std::atomic<bool> client_connected{false};
     std::string connected_ip;
-    uint16_t listen_port = 8765;
+    uint16_t listen_port = DEFAULT_OBS_PORT;
 };
 
 #ifdef _WIN32
@@ -121,8 +122,9 @@ static void *net_thread_proc(void *param) {
     }
 #endif
 
-    // Read port from settings (default 8765)
-    uint16_t listen_port = data->listen_port ? data->listen_port : OBS_PORT;
+    // Read port from settings (default DEFAULT_OBS_PORT)
+    data->listen_port = data->listen_port ? data->listen_port : DEFAULT_OBS_PORT;
+    uint16_t listen_port = data->listen_port;
 
 #ifdef _WIN32
     SOCKET server_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -301,6 +303,112 @@ static void *net_thread_proc(void *param) {
     }
 
     SOCK_CLOSE(server_fd);
+#ifdef _WIN32
+    WSACleanup();
+#endif
+    return nullptr;
+}
+
+// Discovery thread for auto-discovery by phone app
+static void *discovery_thread_proc(void *param) {
+    ojowaptm_audio_data *data = static_cast<ojowaptm_audio_data *>(param);
+
+#ifdef _WIN32
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        blog(LOG_ERROR, "ojowaPTM: discovery WSAStartup failed");
+        return nullptr;
+    }
+#endif
+
+#ifdef _WIN32
+    SOCKET sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+#else
+    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+#endif
+
+#ifdef _WIN32
+    if (sockfd == INVALID_SOCKET) {
+#else
+    if (sockfd < 0) {
+#endif
+        blog(LOG_ERROR, "ojowaPTM: failed to create discovery socket");
+#ifdef _WIN32
+        WSACleanup();
+#endif
+        return nullptr;
+    }
+
+    int opt = 1;
+    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(opt));
+    setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, (const char *)&opt, sizeof(opt));
+    set_nonblocking(sockfd);
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(DEFAULT_DISCOVERY_PORT);
+
+    if (bind(sockfd, (sockaddr *)&addr, sizeof(addr)) < 0) {
+        blog(LOG_ERROR, "ojowaPTM: discovery bind failed on port %d", DEFAULT_DISCOVERY_PORT);
+        SOCK_CLOSE(sockfd);
+#ifdef _WIN32
+        WSACleanup();
+#endif
+        return nullptr;
+    }
+
+    blog(LOG_INFO, "ojowaPTM: discovery listening on port %d", DEFAULT_DISCOVERY_PORT);
+
+    const char *DISCOVERY_MAGIC = "OPTM_DISCOVER";
+    const char *DISCOVERY_RESPONSE_MAGIC = "OPTM_DISC_RESP";
+    std::string local_ip = get_local_ip();
+
+    fd_set readfds;
+    timeval timeout;
+    uint8_t buf[1024];
+
+    while (data->running.load()) {
+        FD_ZERO(&readfds);
+        FD_SET(sockfd, &readfds);
+        timeval timeout;
+        timeout.tv_sec = 0;
+        timeout.tv_usec = 200000;
+
+        int activity = select((int)sockfd + 1, &readfds, nullptr, nullptr, &timeout);
+        if (activity < 0) {
+            if (SOCK_ERRNO == SOCK_EINTR) continue;
+            break;
+        }
+        if (activity == 0) continue;
+
+        if (FD_ISSET(sockfd, &readfds)) {
+            sockaddr_in client_addr{};
+#ifdef _WIN32
+            int client_addr_len = sizeof(sockaddr_in);
+#else
+            socklen_t client_addr_len = sizeof(sockaddr_in);
+#endif
+            ssize_t n = recvfrom(sockfd, reinterpret_cast<char *>(buf), sizeof(buf), 0,
+                                 (sockaddr *)&client_addr, &client_addr_len);
+            if (n <= 0) continue;
+
+            // Check if it's a discovery request
+            if (n >= (ssize_t)strlen(DISCOVERY_MAGIC) && 
+                memcmp(buf, DISCOVERY_MAGIC, strlen(DISCOVERY_MAGIC)) == 0) {
+                
+                // Send discovery response with actual listen_port
+                std::string response = std::string("OPTM_DISC_RESP|") + 
+                    std::to_string(listen_port) + "|" + "OBS Studio";
+                
+                sendto(sockfd, response.c_str(), response.length(), 0,
+                       (sockaddr *)&client_addr, sizeof(client_addr));
+                blog(LOG_INFO, "ojowaPTM: discovery response sent to client");
+            }
+        }
+    }
+
+    SOCK_CLOSE(sockfd);
 #ifdef _WIN32
     WSACleanup();
 #endif
