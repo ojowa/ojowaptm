@@ -535,6 +535,7 @@ static void *ojowaptm_audio_create(obs_data_t *settings, obs_source_t *source) {
     data->source = source;
     data->running.store(true);
     data->net_thread = new std::thread(net_thread_proc, data);
+    data->discovery_thread = new std::thread(discovery_thread_proc, data);
     
     // Set the OBS PC IP address in the source settings
     std::string local_ip = get_local_ip();
@@ -552,6 +553,10 @@ static void ojowaptm_audio_destroy(void *data) {
     if (d->net_thread) {
         d->net_thread->join();
         delete d->net_thread;
+    }
+    if (d->discovery_thread) {
+        d->discovery_thread->join();
+        delete d->discovery_thread;
     }
     delete d;
 }
