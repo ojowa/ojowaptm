@@ -1,0 +1,383 @@
+name: OBS Plugin Build & Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Version tag to deploy (e.g. v1.0.1)'
+        required: false
+  push:
+    branches: [ main ]
+    paths:
+      - 'obs-plugin/**'
+      - '.github/workflows/obs-plugin-ci.yml'
+      - 'tools/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'obs-plugin/**'
+      - '.github/workflows/obs-plugin-ci.yml'
+      - 'tools/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+env:
+  OBS_VERSION: '33.0.1'
+  MSI_OUTPUT_NAME: ojowaptm-obs-plugin-setup.msi
+
+jobs:
+  build-windows:
+    name: Build Windows MSI Installer
+    runs-on: windows-2022
+    timeout-minutes: 90
+    outputs:
+      msi-path: ${{ steps.package.outputs.msi-path }}
+      msi-name: ${{ steps.package.outputs.msi-name }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        shell: pwsh
+        run: |
+          if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
+            choco install cmake --allowemptychecksums -y
+          }
+          Write-Host "CMake version: $(cmake --version | Select-Object -First 1)"
+
+      - name: Clone OBS Studio SDK
+        run: |
+          git clone --depth 1 --recurse-submodules --branch ${{ env.OBS_VERSION }} https://github.com/obsproject/obs-studio.git obs-studio
+
+      - name: Install OBS dependencies
+        shell: pwsh
+        run: |
+          # Download windows-deps for OBS Studio 33.0.1
+          $depsVersion = '2024-03-19'
+          $depsArchive = Join-Path $env:RUNNER_TEMP "windows-deps-$depsVersion-x64.zip"
+          $depsPath = Join-Path $env:RUNNER_TEMP 'obs-deps'
+          Invoke-WebRequest `
+            -Uri "https://github.com/obsproject/obs-deps/releases/download/$depsVersion/windows-deps-$depsVersion-x64.zip" `
+            -OutFile $depsArchive
+          Expand-Archive -Path $depsArchive -DestinationPath $depsPath
+          Add-Content -Path $env:GITHUB_ENV -Value "OBS_DepsPath64=$depsPath"
+
+      - name: Resolve Direct3D compiler library
+        shell: pwsh
+        run: |
+          $outDir = Join-Path $env:GITHUB_WORKSPACE 'ci-libs'
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          $generatedLib = Join-Path $outDir 'd3dcompiler_47.lib'
+          $patchTarget = $null
+
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $libExe = $null
+          if (Test-Path $vswhere) {
+            $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1
+            if ($vsPath) {
+              $libExe = Get-ChildItem -Path (Join-Path $vsPath 'VC\Tools\MSVC') -Directory -ErrorAction SilentlyContinue |
+                Sort-Object Name -Descending |
+                ForEach-Object { Join-Path $_.FullName 'bin\Hostx64\x64\lib.exe' } |
+                Where-Object { Test-Path $_ } | Select-Object -First 1
+            }
+          }
+          $defFile = Join-Path $outDir 'd3dcompiler_47.def'
+          @('LIBRARY d3dcompiler_47', 'EXPORTS', '    D3DCompile', '    D3DCreateBlob') | Set-Content -Path $defFile -Encoding ascii
+          if ($libExe) {
+            & $libExe /nologo /def:$defFile /machine:x64 /out:$generatedLib
+            if ($LASTEXITCODE -eq 0 -and (Test-Path $generatedLib)) {
+              $patchTarget = $generatedLib
+              Write-Host "Generated import lib via lib.exe: $generatedLib"
+            } else {
+              Write-Host "lib.exe failed (exit $LASTEXITCODE); falling back to SDK search"
+            }
+          } else {
+            Write-Host "lib.exe not found via vswhere; falling back to SDK search"
+          }
+
+          if (-not $patchTarget) {
+            $sdkLibRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\Lib'
+            $candidates = @()
+            if (Test-Path $sdkLibRoot) {
+              $candidates = @(
+                Get-ChildItem -Path $sdkLibRoot -Filter d3dcompiler_47.lib -Recurse -File -ErrorAction SilentlyContinue |
+                  Where-Object { $_.FullName -match '\\um\\x64\\d3dcompiler_47\.lib$' } |
+                  Sort-Object { try { [version]$_.Directory.Parent.Parent.Name } catch { [version]'0.0.0.0' } } -Descending |
+                  Select-Object -First 1
+                Get-ChildItem -Path $sdkLibRoot -Filter d3dcompiler.lib -Recurse -File -ErrorAction SilentlyContinue |
+                  Where-Object { $_.FullName -match '\\um\\x64\\d3dcompiler\.lib$' } |
+                  Sort-Object { try { [version]$_.Directory.Parent.Parent.Name } catch { [version]'0.0.0.0' } } -Descending |
+                  Select-Object -First 1
+              ) | Where-Object { $_ }
+            }
+            if ($candidates) { $patchTarget = $candidates[0].FullName }
+          }
+
+          if (-not $patchTarget) {
+            Write-Host "No d3dcompiler lib available to patch; relying on the Visual Studio toolset default library path."
+            exit 0
+          }
+
+          $libraryPath = $patchTarget.Replace('\', '/')
+          $replacement = 'target_link_libraries(libobs-d3d11 PRIVATE OBS::libobs d3d9 d3d11 "' + $libraryPath + '" dxgi shcore)'
+          $patchJobs = @(
+            @{ File = 'obs-studio/libobs-d3d11/cmake/legacy.cmake'; Original = 'target_link_libraries(libobs-d3d11 PRIVATE OBS::libobs d3d9 d3d11 dxgi shcore)'; Required = $true },
+            @{ File = 'obs-studio/libobs-d3d11/CMakeLists.txt'; Original = 'target_link_libraries(libobs-d3d11 PRIVATE OBS::libobs d3d9 d3d11 d3dcompiler dxgi shcore)'; Required = $false }
+          )
+          foreach ($job in $patchJobs) {
+            if (-not (Test-Path $job.File)) { Write-Host "Missing $($job.File); skipping"; continue }
+            $contents = Get-Content -Raw $job.File
+            if (-not $contents.Contains($job.Original)) {
+              if ($job.Required) { throw "Expected link line not found in $($job.File)" }
+              Write-Host "Link line not found in $($job.File); skipping"
+              continue
+            }
+            $contents = $contents.Replace($job.Original, $replacement)
+            Set-Content -Path $job.File -Value $contents -NoNewline
+            Write-Host "Patched $($job.File)"
+            Select-String -Path $job.File -Pattern 'target_link_libraries\(libobs-d3d11' | ForEach-Object { Write-Host "  $($_.Line.Trim())" }
+          }
+          Write-Host "Using Direct3D compiler library: $patchTarget"
+
+      - name: Configure OBS Studio (Windows)
+        shell: pwsh
+        run: |
+          cmake -S obs-studio -B obs-studio/build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DENABLE_UI=OFF -DENABLE_SCRIPTING=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $vcx = Get-ChildItem obs-studio/build/libobs-d3d11 -Filter 'libobs-d3d11.vcxproj' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($vcx) {
+            Write-Host "=== d3dcompiler references in $($vcx.Name) ==="
+            Select-String -Path $vcx.FullName -Pattern 'd3dcompiler' | ForEach-Object { Write-Host $_.Line.Trim() }
+          }
+          Write-Host "OBS configure complete"
+
+      - name: Build OBS runtime libraries (Windows)
+        shell: pwsh
+        run: |
+          cmake --build obs-studio/build --config Release -j 4
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "OBS runtime libraries build complete"
+
+      - name: Install OBS to local prefix (Windows)
+        shell: pwsh
+        run: |
+          $env:OBS_INSTALL_PREFIX = "$env:GITHUB_WORKSPACE/obs-install"
+          cmake --install obs-studio/build --prefix $env:OBS_INSTALL_PREFIX --config Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "OBS installed to $env:OBS_INSTALL_PREFIX"
+
+      - name: Stage OBS headers and import lib for plugin
+        shell: pwsh
+        run: |
+          # Stage OBS headers from source tree
+          New-Item -ItemType Directory -Force -Path .deps/obs-studio | Out-Null
+          Copy-Item -Recurse obs-studio/libobs .deps/obs-studio/libobs
+          if (-not (Test-Path .deps/obs-studio/libobs/obs-module.h)) { throw 'obs-module.h staging failed' }
+
+          # Find obs.lib - OBS 33.x may install it in different locations
+          $obsLibPaths = @(
+            "$env:GITHUB_WORKSPACE/obs-install/bin/64bit/obs.lib",
+            "$env:GITHUB_WORKSPACE/obs-install/lib/64bit/obs.lib",
+            "$env:GITHUB_WORKSPACE/obs-install/lib/obs.lib",
+            "$env:GITHUB_WORKSPACE/obs-studio/build/libobs/Release/obs.lib",
+            "$env:GITHUB_WORKSPACE/obs-studio/build/libobs/Debug/obs.lib"
+          )
+          $obsLib = $null
+          foreach ($p in $obsLibPaths) {
+            if (Test-Path $p) { $obsLib = $p; break }
+          }
+          if (-not $obsLib) { throw 'obs.lib not found in any expected location' }
+          Write-Host "Found obs.lib at: $obsLib"
+
+          New-Item -ItemType Directory -Force -Path .deps/obs-lib | Out-Null
+          Copy-Item -LiteralPath $obsLib -Destination .deps/obs-lib/obs.lib
+          if (-not (Test-Path .deps/obs-lib/obs.lib)) { throw 'obs.lib staging failed' }
+          Write-Host "Staged OBS development files into .deps/"
+
+      - name: Validate OBS installation (Windows)
+        shell: pwsh
+        run: |
+          $env:OBS_INSTALL_PREFIX = "$env:GITHUB_WORKSPACE/obs-install"
+          Write-Host "=== OBS Install Tree ==="
+          Get-ChildItem -Recurse $env:OBS_INSTALL_PREFIX | Select-Object -First 50
+          Write-Host "=== Checking for OBS CMake config ==="
+          $configPaths = @(
+            "$env:OBS_INSTALL_PREFIX/lib/cmake/OBS/OBSConfig.cmake",
+            "$env:OBS_INSTALL_PREFIX/lib64/cmake/OBS/OBSConfig.cmake",
+            "$env:OBS_INSTALL_PREFIX/share/cmake/OBS/OBSConfig.cmake"
+          )
+          $found = $false
+          foreach ($p in $configPaths) {
+            if (Test-Path $p) {
+              Write-Host "FOUND: $p"
+              $found = $true
+            }
+          }
+          if (-not $found) {
+            Write-Host "WARNING: No OBS CMake config package found. Plugin will use manual detection fallback."
+          }
+          Write-Host "=== OBS Headers ==="
+          Get-ChildItem -Path "$env:OBS_INSTALL_PREFIX/include" -Recurse -Filter "*.h" | Select-Object -First 20
+          Write-Host "=== OBS Libraries ==="
+          Get-ChildItem -Path "$env:OBS_INSTALL_PREFIX/lib" -Recurse -Filter "*.lib" -ErrorAction SilentlyContinue
+          Get-ChildItem -Path "$env:OBS_INSTALL_PREFIX/bin" -Recurse -Filter "*.dll" -ErrorAction SilentlyContinue
+
+      - name: Download FFmpeg development build (Windows)
+        shell: pwsh
+        run: |
+          $ffmpegBuild = 'ffmpeg-n8.1-latest-win64-lgpl-shared-8.1'
+          $ffmpegArchive = Join-Path $env:RUNNER_TEMP "$ffmpegBuild.zip"
+          Invoke-WebRequest `
+            -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$ffmpegBuild.zip" `
+            -OutFile $ffmpegArchive
+          $extractPath = Join-Path $env:RUNNER_TEMP 'ffmpeg-extract'
+          Expand-Archive -Path $ffmpegArchive -DestinationPath $extractPath -Force
+          $inner = Get-ChildItem $extractPath -Directory | Select-Object -First 1
+          if (-not $inner) { throw 'FFmpeg archive extraction failed' }
+          $dest = Join-Path $env:GITHUB_WORKSPACE '.deps/ffmpeg'
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          foreach ($sub in 'include', 'lib', 'bin') {
+            Copy-Item -Recurse -Force (Join-Path $inner.FullName $sub) $dest
+          }
+          if (-not (Test-Path (Join-Path $dest 'include/libavcodec/avcodec.h'))) { throw 'FFmpeg include staging failed' }
+          if (-not (Test-Path (Join-Path $dest 'lib/avcodec.lib'))) { throw 'FFmpeg import lib staging failed' }
+          Write-Host "Staged FFmpeg development build to $dest"
+
+      - name: Configure OjowaPTM OBS Plugin (Windows)
+        shell: pwsh
+        run: |
+          # Use CMake preset for plugin configuration
+          cmake --preset windows-x64 -S obs-plugin -B obs-plugin/build -DCMAKE_PREFIX_PATH="$env:GITHUB_WORKSPACE/obs-install"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "OjowaPTM plugin configure complete"
+
+      - name: Build OjowaPTM OBS Plugin (Windows)
+        shell: pwsh
+        run: |
+          cmake --build obs-plugin/build --target ojowaPTM-obs --config Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "OjowaPTM plugin build complete"
+
+      - name: Code sign Windows OBS Plugin (Authenticode)
+        if: env.WINDOWS_SIGNING_CERT != ''
+        env:
+          WINDOWS_SIGNING_CERT: ${{ secrets.WINDOWS_SIGNING_CERT }}
+          WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
+        shell: pwsh
+        run: |
+          $certPath = "$env:RUNNER_TEMP/ojowaptm-signing-cert.pfx"
+          [System.IO.File]::WriteAllBytes($certPath, [System.Convert]::FromBase64String($env:WINDOWS_SIGNING_CERT))
+          $dllPath = Get-ChildItem -Path "obs-plugin/build" -Filter "ojowaPTM-obs.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($dllPath) {
+            & signtool sign /f $certPath /p $env:WINDOWS_SIGNING_CERT_PASSWORD /t http://timestamp.digicert.com /v $dllPath.FullName
+            Write-Host "Windows OBS plugin signed successfully"
+          } else {
+            Write-Host "No DLL found to sign"
+          }
+
+      - name: Install WiX Toolset (dotnet global tool)
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $wixTools = Join-Path $env:APPDATA 'dotnet\tools'
+          Add-Content -Path $env:GITHUB_PATH -Value $wixTools
+          $env:Path = "$wixTools;$env:Path"
+          wix --version
+
+      - name: Package MSI (WiX)
+        id: package
+        shell: pwsh
+        run: |
+          $pluginDll = Join-Path $env:GITHUB_WORKSPACE 'obs-plugin/build/Release/ojowaPTM-obs.dll'
+          if (-not (Test-Path $pluginDll)) {
+            $found = Get-ChildItem -Path "$env:GITHUB_WORKSPACE/obs-plugin/build" -Filter "ojowaPTM-obs.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $found) { throw 'OBS plugin DLL was not built.' }
+            $pluginDll = $found.FullName
+          }
+          Write-Host "Plugin DLL: $pluginDll"
+
+          $pluginStage = Join-Path $env:RUNNER_TEMP 'ojowaptm-obs-plugin-msi'
+          New-Item -ItemType Directory -Force -Path $pluginStage | Out-Null
+          Copy-Item -LiteralPath $pluginDll -Destination (Join-Path $pluginStage 'ojowaptm-obs.dll') -Force
+
+          $msiPath = Join-Path $env:GITHUB_WORKSPACE "obs-plugin/build/${env:MSI_OUTPUT_NAME}"
+          wix build `
+            "obs-plugin/ojowaptm-obs-plugin.wxs" `
+            -d PluginTargetDir="$pluginStage" `
+            -acceptEula wix7 `
+            -out $msiPath 2>&1 | Select-Object -Last 8
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          if (-not (Test-Path $msiPath)) { throw 'MSI was not produced.' }
+          Write-Host "MSI built: $msiPath"
+          echo "msi-path=$msiPath" >> $env:GITHUB_OUTPUT
+          echo "msi-name=${env:MSI_OUTPUT_NAME}" >> $env:GITHUB_OUTPUT
+
+      - name: Upload OjowaPTM OBS Plugin MSI
+        uses: actions/upload-artifact@v4
+        with:
+          name: ojowaptm-obs-plugin-msi
+          path: obs-plugin/build/${{ env.MSI_OUTPUT_NAME }}
+          retention-days: 30
+
+  deploy-release:
+    name: Deploy GitHub Release
+    needs: build-windows
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download MSI artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ojowaptm-obs-plugin-msi
+          path: ./dist
+
+      - name: Determine release version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if (-not $tag -or $tag -eq "main") {
+            $tag = "${{ github.event.inputs.tag_name }}"
+          }
+          if (-not $tag) { throw 'No version tag specified. Push a tag (e.g. v1.0.1) or use workflow_dispatch with tag_name.' }
+          Write-Host "Release version: $tag"
+          echo "RELEASE_VERSION=$tag" >> $env:GITHUB_ENV
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_VERSION }}
+          name: "ojowaPTM OBS Plugin ${{ env.RELEASE_VERSION }}"
+          body: |
+            ## ojowaPTM OBS Microphone Plugin v${{ env.RELEASE_VERSION }}
+
+            Windows MSI installer for the ojowaPTM OBS Microphone audio source plugin.
+
+            ### Installation
+            1. Download `ojowaptm-obs-plugin-setup.msi`
+            2. Run the installer
+            3. Restart OBS Studio
+            4. Add "ojowaPTM Microphone" as an audio source in OBS
+
+            ### Protocol
+            The plugin listens on TCP port 8765 and expects the OPTM stream format from the ojowaPTM mobile app.
+          files: ./dist/*.msi
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

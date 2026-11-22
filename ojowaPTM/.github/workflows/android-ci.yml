@@ -1,0 +1,285 @@
+name: Android CI/CD
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+    paths:
+      - 'android/**'
+      - 'src/**'
+      - 'index.js'
+      - 'package.json'
+      - 'app.json'
+      - '.github/workflows/android-ci.yml'
+      - 'babel.config.js'
+      - 'metro.config.js'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'android/**'
+      - 'src/**'
+      - 'index.js'
+      - 'package.json'
+      - 'app.json'
+      - '.github/workflows/android-ci.yml'
+      - 'babel.config.js'
+      - 'metro.config.js'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  NODE_VERSION: '20'
+  JAVA_VERSION: '17'
+  ANDROID_COMPILE_SDK: 33
+  ANDROID_BUILD_TOOLS: '33.0.0'
+  ANDROID_MIN_SDK: 23
+  ANDROID_TARGET_SDK: 33
+  NDK_VERSION: '21.4.7075529'
+  GRADLE_VERSION: '8.5'
+  APK_ARTIFACT_NAME: ojowaPTM-android-debug-apk
+
+jobs:
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    continue-on-error: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+
+      - name: Install Android SDK Command Line Tools
+        run: |
+          mkdir -p $ANDROID_HOME/cmdline-tools
+          cd $ANDROID_HOME/cmdline-tools
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
+          unzip -q cmdline-tools.zip
+          mv cmdline-tools latest
+          rm cmdline-tools.zip
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
+
+      - name: Install Android SDK Platforms
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager "platforms;android-${{ env.ANDROID_COMPILE_SDK }}"
+          sdkmanager "build-tools;${{ env.ANDROID_BUILD_TOOLS }}"
+          sdkmanager "ndk;${{ env.NDK_VERSION }}"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          rm -rf node_modules package-lock.json
+          npm install --legacy-peer-deps
+
+      - name: Build React Native Gradle Plugin
+        working-directory: node_modules/@react-native/gradle-plugin
+        run: ./gradlew build
+
+      - name: Decode Android release keystore (optional)
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            mkdir -p android/app
+            echo "${ANDROID_KEYSTORE_BASE64}" | base64 -d > android/app/ojowaptm-release-key.jks
+            echo "ANDROID_KEYSTORE_PATH=$GITHUB_WORKSPACE/android/app/ojowaptm-release-key.jks" >> $GITHUB_ENV
+            echo "Release keystore decoded"
+          else
+            echo "No release keystore provided — debug build only"
+          fi
+
+      - name: Make gradlew executable
+        run: chmod +x ${{ github.workspace }}/android/gradlew
+
+      - name: Build Android Debug APK
+        run: cd ${{ github.workspace }}/android && ./gradlew assembleDebug
+
+      - name: Build Android Release APK and AAB (optional)
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ env.ANDROID_KEYSTORE_PATH }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          cd ${{ github.workspace }}/android
+          if [ -n "$ANDROID_KEYSTORE_PATH" ]; then
+            echo "ANDROID_KEYSTORE_PATH=$ANDROID_KEYSTORE_PATH" >> $GITHUB_ENV
+            echo "KEY_ALIAS=$KEY_ALIAS" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=$KEY_PASSWORD" >> $GITHUB_ENV
+            echo "ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD" >> $GITHUB_ENV
+            ./gradlew assembleRelease bundleRelease
+          else
+            echo "Skipping release build — no keystore configured"
+          fi
+
+      - name: Stage artifacts into publish folder
+        run: |
+          mkdir -p ci-output/apk/publish ci-output/apk-release/publish ci-output/aab/publish
+          # Debug APKs (split by architecture)
+          cp ${{ github.workspace }}/android/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk ci-output/apk/publish/app-arm64-v8a-debug.apk 2>/dev/null || true
+          cp ${{ github.workspace }}/android/app/build/outputs/apk/debug/app-armeabi-v7a-debug.apk ci-output/apk/publish/app-armeabi-v7a-debug.apk 2>/dev/null || true
+          cp ${{ github.workspace }}/android/app/build/outputs/apk/debug/app-x86-debug.apk ci-output/apk/publish/app-x86-debug.apk 2>/dev/null || true
+          cp ${{ github.workspace }}/android/app/build/outputs/apk/debug/app-x86_64-debug.apk ci-output/apk/publish/app-x86_64-debug.apk 2>/dev/null || true
+          # Fallback to universal debug APK if split APKs not found
+          cp ${{ github.workspace }}/android/app/build/outputs/apk/debug/app-debug.apk ci-output/apk/publish/app-debug.apk 2>/dev/null || true
+          # Release APKs (split by architecture)
+          if [ -f ${{ github.workspace }}/android/app/build/outputs/apk/release/app-arm64-v8a-release.apk ]; then
+            cp ${{ github.workspace }}/android/app/build/outputs/apk/release/app-arm64-v8a-release.apk ci-output/apk-release/publish/
+            cp ${{ github.workspace }}/android/app/build/outputs/apk/release/app-armeabi-v7a-release.apk ci-output/apk-release/publish/
+            cp ${{ github.workspace }}/android/app/build/outputs/apk/release/app-x86-release.apk ci-output/apk-release/publish/
+            cp ${{ github.workspace }}/android/app/build/outputs/apk/release/app-x86_64-release.apk ci-output/apk-release/publish/
+          fi
+          # Release AAB
+          if [ -f ${{ github.workspace }}/android/app/build/outputs/bundle/release/app-release.aab ]; then
+            cp ${{ github.workspace }}/android/app/build/outputs/bundle/release/app-release.aab ci-output/aab/publish/
+          fi
+          echo "=== Staged artifacts ==="
+          find ci-output -type f
+
+      - name: Upload Android Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APK_ARTIFACT_NAME }}
+          path: ci-output/apk/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Android Release APK
+        if: env.ANDROID_KEYSTORE_PATH != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ojowaPTM-android-apk-release
+          path: ci-output/apk-release/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Android AAB
+        if: env.ANDROID_KEYSTORE_PATH != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ojowaPTM-android-aab
+          path: ci-output/aab/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish-release:
+    name: Publish Android GitHub Release
+    needs: build-android
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Debug APK artifact
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: ${{ env.APK_ARTIFACT_NAME }}
+          path: ./dist-debug
+
+      - name: Download Release APK artifact
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: ojowaPTM-android-apk-release
+          path: ./dist-release
+
+      - name: Stage APKs for release
+        run: |
+          mkdir -p dist
+          # Prefer signed release APKs; fall back to debug APKs
+          if [ -d dist-release ] && [ -n "$(find dist-release -name '*.apk' -print -quit)" ]; then
+            find dist-release -name '*.apk' -exec cp {} dist/ \;
+            echo "Using signed release APKs"
+          elif [ -d dist-debug ]; then
+            find dist-debug -name '*.apk' -exec cp {} dist/ \;
+            echo "Using debug APKs (no release artifact found)"
+          else
+            echo "No APK artifacts found" >&2
+            exit 1
+          fi
+          echo "=== APKs for release ==="
+          ls -la dist/
+
+      - name: Get release version
+        shell: pwsh
+        run: |
+          $version = "1.0.0"
+          if ($env:GITHUB_REF -match "refs/tags/v?(.+)") { $version = $matches[1] }
+          Write-Host "Release version: $version"
+          echo "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.RELEASE_VERSION }}
+          name: "ojowaPTM Android v${{ env.RELEASE_VERSION }}"
+          body: |
+            ## ojowaPTM Android v${{ env.RELEASE_VERSION }}
+
+            Phone as Mic for OBS — Android APK release.
+
+            ### Installation
+            1. Download the appropriate APK for your device architecture:
+               - `app-arm64-v8a-release.apk` - for modern 64-bit ARM devices (most phones)
+               - `app-armeabi-v7a-release.apk` - for older 32-bit ARM devices
+               - `app-x86_64-release.apk` - for x86_64 emulators
+               - `app-x86-release.apk` - for x86 emulators
+            2. Install on your Android device (enable "Install from unknown sources" if needed)
+            3. Connect phone and PC to the same WiFi
+            4. Open the app, enter your OBS PC IP address, and tap START STREAMING
+            5. In OBS, add "ojowaPTM Microphone" as an audio source
+
+            ### Protocol
+            Streams 48kHz s16le mono PCM over TCP port 8765 to the ojowaPTM OBS plugin.
+          files: dist/*.apk
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  lint-android:
+    name: Lint Android Code
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          rm -rf node_modules package-lock.json
+          npm install --legacy-peer-deps
+
+      - name: Run ESLint
+        run: npx eslint src/
