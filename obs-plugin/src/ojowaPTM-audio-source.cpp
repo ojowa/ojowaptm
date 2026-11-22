@@ -215,7 +215,7 @@ static void *net_thread_proc(void *param) {
                     FD_ZERO(&r);
                     FD_SET(client_fd, &r);
                     timeout.tv_sec = 0;
-                    timeout.tv_usec = 200000;
+                    timeout.tv_usec = 50000;  // 50ms for faster disconnect detection
                     int sel = select((int)client_fd + 1, &r, nullptr, nullptr, &timeout);
                     if (sel <= 0) continue;
 
@@ -277,7 +277,7 @@ static void *net_thread_proc(void *param) {
                     FD_ZERO(&r);
                     FD_SET(client_fd, &r);
                     timeout.tv_sec = 0;
-                    timeout.tv_usec = 200000;
+                    timeout.tv_usec = 50000;  // 50ms for faster disconnect detection
                     int sel = select((int)client_fd + 1, &r, nullptr, nullptr, &timeout);
                     if (sel <= 0) continue;
 
