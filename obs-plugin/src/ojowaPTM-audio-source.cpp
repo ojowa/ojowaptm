@@ -6,7 +6,9 @@
 # define _WIN32_WINNT 0x0600
 # include <winsock2.h>
 # include <ws2tcpip.h>
+# include <iphlpapi.h>
 # pragma comment(lib, "ws2_32.lib")
+# pragma comment(lib, "iphlpapi.lib")
 # define SOCK_ERRNO WSAGetLastError()
 # define SOCK_EINTR WSAEINTR
 # define SOCK_EWOULDBLOCK WSAEWOULDBLOCK
@@ -47,29 +49,6 @@
 
 // Required libobs module exports (obs_module_set_pointer / obs_module_ver).
 OBS_DECLARE_MODULE()
-
-#ifdef _WIN32
-# include <winsock2.h>
-# pragma comment(lib, "ws2_32.lib")
-# define SOCK_ERRNO WSAGetLastError()
-# define SOCK_EINTR WSAEINTR
-# define SOCK_EWOULDBLOCK WSAEWOULDBLOCK
-# define SOCK_EAGAIN WSAEWOULDBLOCK
-# define SOCK_CLOSE closesocket
-# ifndef ssize_t
-#   define ssize_t int64_t
-# endif
-#else
-# include <sys/socket.h>
-# include <netinet/in.h>
-# include <unistd.h>
-# include <fcntl.h>
-# define SOCK_ERRNO errno
-# define SOCK_EINTR EINTR
-# define SOCK_EWOULDBLOCK EWOULDBLOCK
-# define SOCK_EAGAIN EAGAIN
-# define SOCK_CLOSE close
-#endif
 
 static const uint16_t DEFAULT_OBS_PORT = 8765;
 static const uint16_t DEFAULT_DISCOVERY_PORT = 8766;
@@ -419,9 +398,28 @@ static void *discovery_thread_proc(void *param) {
     return nullptr;
 }
 
-// Get local IP address of the machine
+// Check if IP is a private LAN address (not virtual/VPN)
+static bool is_lan_ip(const char* ip_str) {
+    if (!ip_str) return false;
+    int a, b, c, d;
+    if (sscanf(ip_str, "%d.%d.%d.%d", &a, &b, &c, &d) != 4) return false;
+    // 10.x.x.x
+    if (a == 10) return true;
+    // 192.168.x.x
+    if (a == 192 && b == 168) return true;
+    // 172.16.x.x - 172.31.x.x (but exclude common WSL2/Docker ranges)
+    if (a == 172 && b >= 16 && b <= 31) {
+        // Exclude common WSL2 ranges: 172.16-31.x.x where it's likely virtual
+        // But still allow if it's the only option
+        return true;
+    }
+    return false;
+}
+
+// Get local IP address of the machine (prefers LAN IPs over virtual/VPN)
 static std::string get_local_ip() {
     std::string local_ip = "unknown";
+    std::string fallback_ip = "unknown";
     
 #ifdef _WIN32
     WSADATA wsaData;
@@ -429,6 +427,66 @@ static std::string get_local_ip() {
         return local_ip;
     }
     
+    // Use GetAdaptersAddresses to enumerate all interfaces
+    ULONG flags = GAA_FLAG_INCLUDE_PREFIX;
+    ULONG family = AF_INET;
+    ULONG buf_size = 15000;
+    std::vector<char> buf(buf_size);
+    
+    IP_ADAPTER_ADDRESSES* adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buf.data());
+    DWORD result = GetAdaptersAddresses(family, flags, nullptr, adapters, &buf_size);
+    
+    if (result == ERROR_BUFFER_OVERFLOW) {
+        buf.resize(buf_size);
+        adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buf.data());
+        result = GetAdaptersAddresses(family, flags, nullptr, adapters, &buf_size);
+    }
+    
+    if (result == NO_ERROR) {
+        for (IP_ADAPTER_ADDRESSES* adapter = adapters; adapter != nullptr; adapter = adapter->Next) {
+            // Skip loopback, tunnel, and virtual adapters
+            if (adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
+            if (adapter->OperStatus != IfOperStatusUp) continue;
+            
+            // Skip common virtual adapter names
+            std::wstring desc(adapter->FriendlyName);
+            std::wstring name(adapter->AdapterName);
+            if (desc.find(L"WSL") != std::wstring::npos) continue;
+            if (desc.find(L"Docker") != std::wstring::npos) continue;
+            if (desc.find(L"vEthernet") != std::wstring::npos) continue;
+            if (desc.find(L"Hyper-V") != std::wstring::npos) continue;
+            if (desc.find(L"VPN") != std::wstring::npos) continue;
+            if (desc.find(L"Virtual") != std::wstring::npos) continue;
+            if (name.find(L"WSL") != std::wstring::npos) continue;
+            
+            for (IP_ADAPTER_UNICAST_ADDRESS* ua = adapter->FirstUnicastAddress; ua != nullptr; ua = ua->Next) {
+                if (ua->Address.lpSockaddr->sa_family == AF_INET) {
+                    sockaddr_in* sin = reinterpret_cast<sockaddr_in*>(ua->Address.lpSockaddr);
+                    char ip_str[INET_ADDRSTRLEN];
+                    inet_ntop(AF_INET, &sin->sin_addr, ip_str, INET_ADDRSTRLEN);
+                    
+                    if (is_lan_ip(ip_str)) {
+                        // Prefer non-WSL2 172.x ranges
+                        int a, b, c, d;
+                        sscanf(ip_str, "%d.%d.%d.%d", &a, &b, &c, &d);
+                        if (!(a == 172 && b >= 24 && b <= 31)) { // Avoid 172.24-31.x.x (WSL2)
+                            WSACleanup();
+                            return std::string(ip_str);
+                        }
+                        fallback_ip = ip_str;
+                    }
+                }
+            }
+        }
+    }
+    
+    // If we found a fallback LAN IP, use it
+    if (fallback_ip != "unknown") {
+        WSACleanup();
+        return fallback_ip;
+    }
+    
+    // Fallback to gethostbyname method
     char hostname[256];
     if (gethostname(hostname, sizeof(hostname)) == 0) {
         struct hostent *host = gethostbyname(hostname);
