@@ -215,6 +215,11 @@ export default function HomeScreen() {
       } catch {
         setIpAddress('unknown');
       }
+
+      // Auto-discover OBS on app startup for a seamless experience
+      if (ObsDiscovery && connection.host === '') {
+        discoverObsServers();
+      }
     })();
   }, []);
 
@@ -232,11 +237,28 @@ export default function HomeScreen() {
     };
   }, []);
 
+  // Auto-populate connection when exactly one OBS is discovered
+  // and user hasn't entered an IP yet — makes it seamless
+  useEffect(() => {
+    if (
+      discoveredServers.length === 1 &&
+      connection.host === '' &&
+      lastConnectedIP === ''
+    ) {
+      const server = discoveredServers[0];
+      setConnection((prev) => ({ ...prev, host: server.ip, port: server.port }));
+      Alert.alert(
+        'OBS Found',
+        `Found OBS at ${server.ip}:${server.port}.\nTap START STREAMING to begin.`,
+        [{ text: 'OK' }]
+      );
+    }
+  }, [discoveredServers, connection.host, lastConnectedIP]);
+
   // Auto-discovery of OBS PC on local network via UDP broadcast
   // Sends OPTM_DISCOVER to port 8766, listens for OPTM_DISC_RESP responses
   const discoverObsServers = useCallback(async () => {
     if (!ObsDiscovery) {
-      Alert.alert('Discovery not available', 'Native discovery module not available on this platform.');
       return;
     }
     setIsDiscovering(true);
@@ -270,9 +292,7 @@ export default function HomeScreen() {
   }, []);
 
   const handleDiscoverPress = useCallback(() => {
-    discoverObsServers().then(() => {
-      // Auto-discovery not implemented - user must enter IP manually
-    });
+    discoverObsServers();
   }, []);
 
   const handleStateChange = useCallback(
