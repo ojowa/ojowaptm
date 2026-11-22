@@ -182,7 +182,9 @@ export default function HomeScreen() {
 
   const updatePort = (text: string) => {
     const p = parseInt(text, 10) || DEFAULT_OBS_PORT;
-    setConnection((prev) => ({ ...prev, port: p }));
+    // Clamp to valid port range (1024–65535), matching OBS plugin
+    const port = Math.min(Math.max(p, 1024), 65535);
+    setConnection((prev) => ({ ...prev, port }));
   };
 
   const updateAudioSource = (source: AudioSource) => {
