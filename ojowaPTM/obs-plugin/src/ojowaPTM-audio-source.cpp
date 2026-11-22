@@ -342,9 +342,6 @@ static void *net_thread_proc(void *param) {
     return nullptr;
 }
 
-// Forward declaration
-static std::string get_local_ip();
-
 // Discovery thread for auto-discovery by phone app
 static void *discovery_thread_proc(void *param) {
     ojowaptm_audio_data *data = static_cast<ojowaptm_audio_data *>(param);
@@ -583,10 +580,15 @@ static std::string get_local_ip() {
 }
 
 static void *ojowaptm_audio_create(obs_data_t *settings, obs_source_t *source) {
-    UNUSED_PARAMETER(settings);
     auto data = new ojowaptm_audio_data();
     data->source = source;
     data->running.store(true);
+
+    // Load listen port from settings (default 8765)
+    if (obs_data_has_user_value(settings, "listen_port")) {
+        data->listen_port = static_cast<uint16_t>(obs_data_get_int(settings, "listen_port"));
+    }
+
     data->net_thread = new std::thread(net_thread_proc, data);
     data->discovery_thread = new std::thread(discovery_thread_proc, data);
     
