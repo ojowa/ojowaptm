@@ -149,4 +149,14 @@ public class ObsDiscoveryModule extends ReactContextBaseJavaModule {
         }
         return null;
     }
+
+    @ReactMethod
+    public void addListener(String eventName) {
+        // Required by NativeEventEmitter on the JS side
+    }
+
+    @ReactMethod
+    public void removeListeners(double count) {
+        // Required by NativeEventEmitter on the JS side
+    }
 }

@@ -108,14 +108,18 @@ export default function HomeScreen() {
 
   const toggleStream = async () => {
     if (state.isStreaming) {
-      if (ultraLowLatency) {
-        UltraLowLatencyStreamService.disconnect();
-      } else {
-        await AudioCaptureService.stopCapture();
-        WiFiStreamService.disconnect();
+      try {
+        if (ultraLowLatency) {
+          UltraLowLatencyStreamService.disconnect();
+        } else {
+          await AudioCaptureService.stopCapture();
+          WiFiStreamService.disconnect();
+        }
+      } catch (err) {
+        console.error('Stop streaming error:', err);
       }
       if (levelInterval) clearInterval(levelInterval);
-      setState((prev) => ({ ...prev, isStreaming: false, isConnected: false, level: 0 }));
+      setState((prev) => ({ ...prev, isStreaming: false, isConnected: false, level: 0, error: null }));
       return;
     }
 

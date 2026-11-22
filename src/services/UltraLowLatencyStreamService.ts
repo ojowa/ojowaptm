@@ -187,7 +187,7 @@ export class UltraLowLatencyStreamService {
               errorType = 'network';
             }
 
-            console.log('Ultra-low latency failed:', error);
+            console.log('Ultra-low latency connect result:', false, '-', error);
             UltraLowLatencyStreamService.onStateChange?.({
               connected: false,
               error,
