@@ -16,6 +16,7 @@ import {
   Alert,
   StatusBar,
   Platform,
+  PermissionsAndroid,
 } from 'react-native';
 import { AudioCaptureService } from '../services/AudioCaptureService';
 import { WiFiStreamService } from '../services/WiFiStreamService';
@@ -96,6 +97,24 @@ export default function HomeScreen() {
     if (!connection.host) {
       Alert.alert('Enter OBS IP', 'Please type the IP address of the PC running OBS.');
       return;
+    }
+
+    // Request microphone permission
+    if (Platform.OS === 'android') {
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+        {
+          title: 'Microphone Permission',
+          message: 'ojowaPTM needs access to your microphone to stream audio to OBS.',
+          buttonNeutral: 'Ask Me Later',
+          buttonNegative: 'Cancel',
+          buttonPositive: 'OK',
+        }
+      );
+      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+        Alert.alert('Permission Required', 'Microphone permission is required to stream audio.');
+        return;
+      }
     }
 
     setState((prev) => ({ ...prev, error: null }));

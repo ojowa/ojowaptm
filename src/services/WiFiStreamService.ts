@@ -13,13 +13,54 @@
  * Each TCP send = one header + one PCM chunk (20ms).
  */
 
-import { Socket } from 'react-native-tcp-socket';
+import TcpSocket from 'react-native-tcp-socket';
 import type { AudioConfig, ObsConnection } from '../types';
 import { STREAM_MAGIC } from '../types';
 
+// atob/btoa polyfills for React Native
+if (typeof globalThis.atob === 'undefined') {
+  globalThis.atob = (base64: string) => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+    let output = '';
+    let buffer = 0;
+    let bits = 0;
+    for (let i = 0; i < base64.length; i++) {
+      const char = base64.charAt(i);
+      if (char === '=') break;
+      const index = chars.indexOf(char);
+      if (index === -1) continue;
+      buffer = (buffer << 6) | index;
+      bits += 6;
+      if (bits >= 8) {
+        bits -= 8;
+        output += String.fromCharCode((buffer >> bits) & 0xff);
+      }
+    }
+    return output;
+  };
+}
+if (typeof globalThis.btoa === 'undefined') {
+  globalThis.btoa = (binary: string) => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+    let output = '';
+    for (let i = 0; i < binary.length; i += 3) {
+      const b1 = binary.charCodeAt(i);
+      const b2 = binary.charCodeAt(i + 1);
+      const b3 = binary.charCodeAt(i + 2);
+      const n = ((b1 & 0xff) << 16) | ((b2 & 0xff) << 8) | (b3 & 0xff);
+      output += chars.charAt((n >> 18) & 0x3f);
+      output += chars.charAt((n >> 12) & 0x3f);
+      output += chars.charAt((n >> 6) & 0x3f);
+      output += chars.charAt(n & 0x3f);
+    }
+    return output.replace(/A+$/, (match) => '='.repeat(match.length));
+  };
+}
+
 type StateChange = (state: { connected: boolean; error: string | null }) => void;
 
-let socket: Socket | null = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let socket: any = null;
 let isConnected = false;
 let reconnectTimer: any = null;
 let reconnectAttempts = 0;
@@ -45,7 +86,7 @@ export class WiFiStreamService {
       isConnected = false;
       reconnectAttempts = 0;
 
-      socket = Socket.createConnection({
+      socket = TcpSocket.createConnection({
         port: connection.port,
         host: connection.host,
         tls: false,
@@ -114,8 +155,9 @@ export class WiFiStreamService {
     payload.set(pcmBytes, header.length);
 
     try {
-      // react-native-tcp-socket: write expects ArrayBuffer or string
-      socket.write(payload.buffer);
+      // react-native-tcp-socket: write accepts Uint8Array/Buffer for binary data
+      // Pass the Uint8Array directly - it will be treated as binary
+      socket.write(payload);
     } catch (err) {
       console.error('Failed to send PCM:', err);
     }
