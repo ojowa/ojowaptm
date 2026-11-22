@@ -178,7 +178,11 @@ export class UltraLowLatencyStreamService {
                 ? `Failed to start capture: ${captured.message.replace('Failed to start: ', '')}`
                 : `Failed to start capture: ${captured.message}`;
             } else {
-              error = 'Ultra-low latency failed: not capturing';
+              // No native error captured but isCapturing() is false
+              // This usually means AudioRecord initialization or startRecording failed
+              // on the native side without emitting an error event
+              error = 'Ultra-low latency failed: native capture did not start. Check Android logcat for AudioRecord errors (e.g., permission denied, unsupported sample rate, or audio device busy).';
+              errorType = 'audio';
             }
 
             // Provide a helpful hint when OBS is not reachable

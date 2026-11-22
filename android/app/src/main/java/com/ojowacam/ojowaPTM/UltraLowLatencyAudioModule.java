@@ -106,12 +106,14 @@ public class UltraLowLatencyAudioModule extends ReactContextBaseJavaModule {
         try {
             // Use MINIMUM buffer size for ultra-low latency
             int minBufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT);
+            Log.i(TAG, "AudioRecord minBufferSize=" + minBufferSize);
             int framesPerChunk = (SAMPLE_RATE * CHUNK_MS) / 1000; // 240 frames @ 5ms
             int chunkBytes = framesPerChunk * 2; // 480 bytes
             
             // Use minimum buffer size directly (no rounding up)
             int bufferSize = Math.max(minBufferSize, chunkBytes);
             bufferSize = (bufferSize / 2) * 2; // Align to 16-bit
+            Log.i(TAG, "AudioRecord bufferSize=" + bufferSize);
             
             audioRecord = new AudioRecord(
                 selectedAudioSource,
@@ -122,10 +124,11 @@ public class UltraLowLatencyAudioModule extends ReactContextBaseJavaModule {
             );
 
             if (audioRecord.getState() != AudioRecord.STATE_INITIALIZED) {
-                Log.e(TAG, "AudioRecord failed to initialize");
-                sendError("AudioRecord init failed");
+                Log.e(TAG, "AudioRecord failed to initialize, state=" + audioRecord.getState());
+                sendError("AudioRecord init failed (state=" + audioRecord.getState() + ")");
                 return;
             }
+            Log.i(TAG, "AudioRecord initialized successfully");
 
             audioBuffer = new byte[chunkBytes];
             packetBuffer = new byte[HEADER_SIZE + chunkBytes];
@@ -134,6 +137,7 @@ public class UltraLowLatencyAudioModule extends ReactContextBaseJavaModule {
             socket = new Socket();
             socket.setTcpNoDelay(true); // Critical: disable Nagle
             socket.setSendBufferSize(64 * 1024); // 64KB send buffer
+            Log.i(TAG, "Connecting TCP to " + serverHost + ":" + serverPort);
             socket.connect(new InetSocketAddress(serverHost, serverPort), 2000);
             outputStream = socket.getOutputStream();
             
@@ -141,6 +145,7 @@ public class UltraLowLatencyAudioModule extends ReactContextBaseJavaModule {
 
             isRunning.set(true);
             framesSent.set(0);
+            Log.i(TAG, "isRunning set to true, starting threads");
 
             // Network thread - handles socket writes
             networkThread = new Thread(this::networkLoop, "UltraLowLatency-Network");
