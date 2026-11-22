@@ -449,15 +449,21 @@ static std::string get_local_ip() {
             if (adapter->OperStatus != IfOperStatusUp) continue;
             
             // Skip common virtual adapter names
-            std::wstring desc(adapter->FriendlyName);
-            std::wstring name(adapter->AdapterName);
+            std::wstring desc;
+            if (adapter->FriendlyName) {
+                desc = std::wstring(adapter->FriendlyName);
+            }
+            std::string name;
+            if (adapter->AdapterName) {
+                name = std::string(adapter->AdapterName);
+            }
             if (desc.find(L"WSL") != std::wstring::npos) continue;
             if (desc.find(L"Docker") != std::wstring::npos) continue;
             if (desc.find(L"vEthernet") != std::wstring::npos) continue;
             if (desc.find(L"Hyper-V") != std::wstring::npos) continue;
             if (desc.find(L"VPN") != std::wstring::npos) continue;
             if (desc.find(L"Virtual") != std::wstring::npos) continue;
-            if (name.find(L"WSL") != std::wstring::npos) continue;
+            if (name.find("WSL") != std::string::npos) continue;
             
             for (IP_ADAPTER_UNICAST_ADDRESS* ua = adapter->FirstUnicastAddress; ua != nullptr; ua = ua->Next) {
                 if (ua->Address.lpSockaddr->sa_family == AF_INET) {
