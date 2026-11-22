@@ -15,6 +15,7 @@ public class AudioMicPackage implements ReactPackage {
     public List<NativeModule> createNativeModules(ReactApplicationContext reactContext) {
         return Arrays.<NativeModule>asList(
                 new AudioMicModule(reactContext),
+                new UltraLowLatencyAudioModule(reactContext),
                 new PowerManagerModule(reactContext),
                 new NetworkInfoModule(reactContext)
         );

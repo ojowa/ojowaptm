@@ -20,6 +20,7 @@ import {
 } from 'react-native';
 import { AudioCaptureService } from '../services/AudioCaptureService';
 import { WiFiStreamService } from '../services/WiFiStreamService';
+import { UltraLowLatencyStreamService } from '../services/UltraLowLatencyStreamService';
 import type { AudioConfig, AudioSource, ObsConnection, StreamState, ObsServerInfo } from '../types';
 import { DEFAULT_AUDIO_CONFIG, DEFAULT_OBS_PORT, DEFAULT_DISCOVERY_PORT, AUDIO_SOURCE_OPTIONS } from '../types';
 
@@ -81,6 +82,7 @@ export default function HomeScreen() {
   const [ipAddress, setIpAddress] = useState<string>('');
   const [levelInterval, setLevelInterval] = useState<any>(null);
   const [audioSource, setAudioSource] = useState<AudioSource>('mic');
+  const [ultraLowLatency, setUltraLowLatency] = useState<boolean>(false);
   const [lastConnectedIP, setLastConnectedIP] = useState<string>('');
   const [discoveredServers, setDiscoveredServers] = useState<ObsServerInfo[]>([]);
   const [isDiscovering, setIsDiscovering] = useState(false);
@@ -89,8 +91,12 @@ export default function HomeScreen() {
 
   const toggleStream = async () => {
     if (state.isStreaming) {
-      await AudioCaptureService.stopCapture();
-      WiFiStreamService.disconnect();
+      if (ultraLowLatency) {
+        UltraLowLatencyStreamService.disconnect();
+      } else {
+        await AudioCaptureService.stopCapture();
+        WiFiStreamService.disconnect();
+      }
       if (levelInterval) clearInterval(levelInterval);
       setState((prev) => ({ ...prev, isStreaming: false, isConnected: false, level: 0 }));
       return;
@@ -121,33 +127,47 @@ export default function HomeScreen() {
 
     setState((prev) => ({ ...prev, error: null }));
 
-    const connected = await WiFiStreamService.connect(connection, handleStateChange);
-    if (!connected) {
-      setState((prev) => ({ ...prev, error: 'Failed to connect to OBS. Check IP/port.' }));
-      return;
-    }
-
-    const started = await AudioCaptureService.startCapture(
-      config,
-      (pcm) => {
-        if (!state.isMuted && WiFiStreamService.isConnected()) {
-          const sendTime = Date.now();
-          setLastSendTime(sendTime);
-          WiFiStreamService.sendPcm(config, pcm);
-        }
-      },
-      (level) => {
-        setState((prev) => ({ ...prev, level }));
+    if (ultraLowLatency) {
+      // Ultra-low latency path: native-only, bypasses JS bridge
+      console.log('Starting ultra-low latency stream...');
+      const connected = await UltraLowLatencyStreamService.connect(connection, handleStateChange);
+      console.log('Ultra-low latency connect result:', connected);
+      if (!connected) {
+        setState((prev) => ({ ...prev, error: 'Failed to start ultra-low latency mode.' }));
+        return;
       }
-    );
+      setState((prev) => ({ ...prev, isStreaming: true }));
+      console.log('Ultra-low latency streaming started');
+    } else {
+      // Standard path: JS bridge
+      const connected = await WiFiStreamService.connect(connection, handleStateChange);
+      if (!connected) {
+        setState((prev) => ({ ...prev, error: 'Failed to connect to OBS. Check IP/port.' }));
+        return;
+      }
 
-    if (!started) {
-      WiFiStreamService.disconnect();
-      setState((prev) => ({ ...prev, error: 'Failed to start microphone capture.' }));
-      return;
+      const started = await AudioCaptureService.startCapture(
+        config,
+        (pcm) => {
+          if (!state.isMuted && WiFiStreamService.isConnected()) {
+            const sendTime = Date.now();
+            setLastSendTime(sendTime);
+            WiFiStreamService.sendPcm(config, pcm);
+          }
+        },
+        (level) => {
+          setState((prev) => ({ ...prev, level }));
+        }
+      );
+
+      if (!started) {
+        WiFiStreamService.disconnect();
+        setState((prev) => ({ ...prev, error: 'Failed to start microphone capture.' }));
+        return;
+      }
+
+      setState((prev) => ({ ...prev, isStreaming: true }));
     }
-
-    setState((prev) => ({ ...prev, isStreaming: true }));
   };
 
   const toggleMute = () => {
@@ -329,6 +349,24 @@ export default function HomeScreen() {
               </TouchableOpacity>
             ))}
           </View>
+        </View>
+
+        <View style={styles.card}>
+          <View style={styles.toggleRow}>
+            <Text style={styles.sectionTitle}>Ultra-Low Latency</Text>
+            <Switch
+              value={ultraLowLatency}
+              onValueChange={setUltraLowLatency}
+              disabled={state.isStreaming}
+              thumbColor={ultraLowLatency ? '#30d158' : '#8e93a0'}
+              trackColor={{ false: '#212833', true: '#1a3d2e' }}
+            />
+          </View>
+          <Text style={styles.helpText}>
+            {ultraLowLatency
+              ? 'Native-only path: 5ms chunks, no JS bridge (~8-15ms latency)'
+              : 'Standard path: JS bridge, 20ms chunks (~35-75ms latency)'}
+          </Text>
         </View>
 
         <View style={styles.controls}>
@@ -605,6 +643,17 @@ const styles = StyleSheet.create({
   sourceTextActive: {
     color: '#ffffff',
   },
+  toggleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  helpText: {
+    fontSize: 11,
+    color: '#8e93a0',
+    marginTop: 4,
+  },
   spinner: {
     marginTop: 16,
   },
@@ -842,239 +891,16 @@ const styles = StyleSheet.create({
   sourceTextActive: {
     color: '#ffffff',
   },
-  spinner: {
-    marginTop: 16,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  discoverButton: {
-    backgroundColor: '#0a84ff',
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  discoverButtonText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  discoveredList: {
-    marginTop: 12,
-    padding: 12,
-    backgroundColor: '#161b22',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  discoveredTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#8e93a0',
-    marginBottom: 8,
-  },
-  discoveredItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 12,
-    backgroundColor: '#0d1117',
-    borderRadius: 8,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  discoveredItemInfo: {
-    flex: 1,
-  },
-  discoveredItemIp: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#0a84ff',
-    fontFamily: 'monospace',
-  },
-  discoveredItemName: {
-    fontSize: 12,
-    color: '#8e93a0',
-    marginTop: 2,
-  },
-  discoveredItemArrow: {
-    color: '#8e93a0',
-    fontSize: 16,
-  },
-  statusRow: {
+  toggleRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 8,
   },
-  statusIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  statusConnected: {
-    backgroundColor: '#1a3d2e',
-    borderWidth: 1,
-    borderColor: '#30d158',
-  },
-  statusDisconnected: {
-    backgroundColor: '#3d1a1a',
-    borderWidth: 1,
-    borderColor: '#ff453a',
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#ffffff',
-  },
-  sourceRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 4,
-  },
-  sourceButton: {
-    backgroundColor: '#212833',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  sourceButtonActive: {
-    backgroundColor: '#0a84ff',
-    borderColor: '#0a84ff',
-  },
-  sourceText: {
+  helpText: {
+    fontSize: 11,
     color: '#8e93a0',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  sourceTextActive: {
-    color: '#ffffff',
-  },
-  spinner: {
-    marginTop: 16,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  discoverButton: {
-    backgroundColor: '#0a84ff',
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  discoverButtonText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  discoveredList: {
-    marginTop: 12,
-    padding: 12,
-    backgroundColor: '#161b22',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  discoveredTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#8e93a0',
-    marginBottom: 8,
-  },
-  discoveredItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 12,
-    backgroundColor: '#0d1117',
-    borderRadius: 8,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  discoveredItemInfo: {
-    flex: 1,
-  },
-  discoveredItemIp: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#0a84ff',
-    fontFamily: 'monospace',
-  },
-  discoveredItemName: {
-    fontSize: 12,
-    color: '#8e93a0',
-    marginTop: 2,
-  },
-  discoveredItemArrow: {
-    color: '#8e93a0',
-    fontSize: 16,
-  },
-  statusRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  statusIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  statusConnected: {
-    backgroundColor: '#1a3d2e',
-    borderWidth: 1,
-    borderColor: '#30d158',
-  },
-  statusDisconnected: {
-    backgroundColor: '#3d1a1a',
-    borderWidth: 1,
-    borderColor: '#ff453a',
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#ffffff',
-  },
-  sourceRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 4,
-  },
-  sourceButton: {
-    backgroundColor: '#212833',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  sourceButtonActive: {
-    backgroundColor: '#0a84ff',
-    borderColor: '#0a84ff',
-  },
-  sourceText: {
-    color: '#8e93a0',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  sourceTextActive: {
-    color: '#ffffff',
+    marginTop: 4,
   },
   spinner: {
     marginTop: 16,
@@ -1193,6 +1019,17 @@ const styles = StyleSheet.create({
   sourceTextActive: {
     color: '#ffffff',
   },
+  toggleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  helpText: {
+    fontSize: 11,
+    color: '#8e93a0',
+    marginTop: 4,
+  },
   spinner: {
     marginTop: 16,
   },
@@ -1310,6 +1147,17 @@ const styles = StyleSheet.create({
   sourceTextActive: {
     color: '#ffffff',
   },
+  toggleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  helpText: {
+    fontSize: 11,
+    color: '#8e93a0',
+    marginTop: 4,
+  },
   spinner: {
     marginTop: 16,
   },
@@ -1427,6 +1275,17 @@ const styles = StyleSheet.create({
   sourceTextActive: {
     color: '#ffffff',
   },
+  toggleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  helpText: {
+    fontSize: 11,
+    color: '#8e93a0',
+    marginTop: 4,
+  },
   spinner: {
     marginTop: 16,
   },
@@ -1543,6 +1402,273 @@ const styles = StyleSheet.create({
   },
   sourceTextActive: {
     color: '#ffffff',
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  helpText: {
+    fontSize: 11,
+    color: '#8e93a0',
+    marginTop: 4,
+  },
+  spinner: {
+    marginTop: 16,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  discoverButton: {
+    backgroundColor: '#0a84ff',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  discoverButtonText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  discoveredList: {
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: '#161b22',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#30363d',
+  },
+  discoveredTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#8e93a0',
+    marginBottom: 8,
+  },
+  discoveredItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#0d1117',
+    borderRadius: 8,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#30363d',
+  },
+  discoveredItemInfo: {
+    flex: 1,
+  },
+  discoveredItemIp: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0a84ff',
+    fontFamily: 'monospace',
+  },
+  discoveredItemName: {
+    fontSize: 12,
+    color: '#8e93a0',
+    marginTop: 2,
+  },
+  discoveredItemArrow: {
+    color: '#8e93a0',
+    fontSize: 16,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  statusIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  statusConnected: {
+    backgroundColor: '#1a3d2e',
+    borderWidth: 1,
+    borderColor: '#30d158',
+  },
+  statusDisconnected: {
+    backgroundColor: '#3d1a1a',
+    borderWidth: 1,
+    borderColor: '#ff453a',
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  sourceRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 4,
+  },
+  sourceButton: {
+    backgroundColor: '#212833',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: '#30363d',
+  },
+  sourceButtonActive: {
+    backgroundColor: '#0a84ff',
+    borderColor: '#0a84ff',
+  },
+  sourceText: {
+    color: '#8e93a0',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  sourceTextActive: {
+    color: '#ffffff',
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  helpText: {
+    fontSize: 11,
+    color: '#8e93a0',
+    marginTop: 4,
+  },
+  spinner: {
+    marginTop: 16,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  discoverButton: {
+    backgroundColor: '#0a84ff',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  discoverButtonText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  discoveredList: {
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: '#161b22',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#30363d',
+  },
+  discoveredTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#8e93a0',
+    marginBottom: 8,
+  },
+  discoveredItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#0d1117',
+    borderRadius: 8,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#30363d',
+  },
+  discoveredItemInfo: {
+    flex: 1,
+  },
+  discoveredItemIp: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0a84ff',
+    fontFamily: 'monospace',
+  },
+  discoveredItemName: {
+    fontSize: 12,
+    color: '#8e93a0',
+    marginTop: 2,
+  },
+  discoveredItemArrow: {
+    color: '#8e93a0',
+    fontSize: 16,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  statusIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  statusConnected: {
+    backgroundColor: '#1a3d2e',
+    borderWidth: 1,
+    borderColor: '#30d158',
+  },
+  statusDisconnected: {
+    backgroundColor: '#3d1a1a',
+    borderWidth: 1,
+    borderColor: '#ff453a',
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  sourceRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 4,
+  },
+  sourceButton: {
+    backgroundColor: '#212833',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: '#30363d',
+  },
+  sourceButtonActive: {
+    backgroundColor: '#0a84ff',
+    borderColor: '#0a84ff',
+  },
+  sourceText: {
+    color: '#8e93a0',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  sourceTextActive: {
+    color: '#ffffff',
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  helpText: {
+    fontSize: 11,
+    color: '#8e93a0',
+    marginTop: 4,
   },
   spinner: {
     marginTop: 16,
