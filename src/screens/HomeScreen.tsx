@@ -84,6 +84,8 @@ export default function HomeScreen() {
   const [lastConnectedIP, setLastConnectedIP] = useState<string>('');
   const [discoveredServers, setDiscoveredServers] = useState<ObsServerInfo[]>([]);
   const [isDiscovering, setIsDiscovering] = useState(false);
+  const [latencyMs, setLatencyMs] = useState<number>(0);
+  const [lastSendTime, setLastSendTime] = useState<number>(0);
 
   const toggleStream = async () => {
     if (state.isStreaming) {
@@ -129,6 +131,8 @@ export default function HomeScreen() {
       config,
       (pcm) => {
         if (!state.isMuted && WiFiStreamService.isConnected()) {
+          const sendTime = Date.now();
+          setLastSendTime(sendTime);
           WiFiStreamService.sendPcm(config, pcm);
         }
       },
@@ -354,6 +358,19 @@ export default function HomeScreen() {
           </Text>
         </View>
 
+        <View style={styles.meterCard}>
+          <Text style={styles.sectionTitle}>Latency</Text>
+          <View style={styles.meterTrack}>
+            <View style={[styles.meterFill, { width: Math.min(latencyMs / 200, 1) * 100 + '%' }]} />
+          </View>
+          <Text style={styles.levelText}>
+            {latencyMs > 0 ? `${latencyMs} ms` : '—'}
+          </Text>
+          <Text style={styles.latencyDetail}>
+            {lastSendTime > 0 ? `Last send: ${Date.now() - lastSendTime} ms ago` : 'Waiting...'}
+          </Text>
+        </View>
+
         <View style={styles.statusCard}>
           <Text style={styles.statusLabel}>Status:</Text>
           <Text style={[styles.statusValue, state.isStreaming ? styles.statusLive : styles.statusIdle]}>
@@ -497,6 +514,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#c9d1d9',
+  },
+  latencyDetail: {
+    fontSize: 11,
+    color: '#8e93a0',
+    marginTop: 4,
   },
   statusCard: {
     backgroundColor: '#161b22',

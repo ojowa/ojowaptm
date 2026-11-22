@@ -138,6 +138,10 @@ public class AudioMicModule extends ReactContextBaseJavaModule {
             return;
         }
         isRunning.set(false);
+        // Stop audioRecord first to unblock the read() call
+        if (audioRecord != null) {
+            try { audioRecord.stop(); } catch (Exception e) { /* ignore */ }
+        }
         if (captureThread != null) {
             captureThread.interrupt();
             captureThread = null;

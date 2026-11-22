@@ -64,6 +64,7 @@ let socket: any = null;
 let isConnected = false;
 let reconnectTimer: any = null;
 let reconnectAttempts = 0;
+let isIntentionalDisconnect = false;
 const MAX_RECONNECT = 10;
 
 let pendingPcm: Int16Array[] = [];
@@ -78,6 +79,7 @@ export class WiFiStreamService {
     onStateChange: StateChange
   ): Promise<boolean> {
     WiFiStreamService.onStateChange = onStateChange;
+    isIntentionalDisconnect = false; // Reset on new connection
     return new Promise((resolve) => {
       if (socket) {
         socket.destroy();
@@ -121,9 +123,11 @@ export class WiFiStreamService {
         isConnected = false;
         console.log('Socket closed, hadError=', hadError);
         WiFiStreamService.onStateChange?.({ connected: false, error: hadError ? 'Connection lost' : 'Disconnected' });
-        if (hadError) {
+        if (hadError && !isIntentionalDisconnect) {
           WiFiStreamService._scheduleReconnect(connection, onStateChange);
         }
+        // Reset flag after handling
+        isIntentionalDisconnect = false;
       });
     });
   }
@@ -171,6 +175,8 @@ export class WiFiStreamService {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
     reconnectAttempts = 0;
+    // Mark as intentional disconnect to prevent auto-reconnect
+    isIntentionalDisconnect = true;
     if (socket) {
       try { socket.destroy(); } catch {}
       socket = null;
