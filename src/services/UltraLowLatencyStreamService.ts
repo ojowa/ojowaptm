@@ -152,7 +152,8 @@ export class UltraLowLatencyStreamService {
         // Start native capture (bypasses JS entirely)
         UltraLowLatencyAudio.startCapture();
 
-        // Give it a moment to connect
+        // Give it time to connect — native TCP connect has 2000ms timeout,
+        // so we wait at least 3500ms to allow connection + capture startup
         setTimeout(() => {
           this.stopErrorListening();
 
@@ -200,7 +201,7 @@ export class UltraLowLatencyStreamService {
             });
             resolve(false);
           }
-        }, 500);
+        }, 3500);
       } catch (err) {
         const captured = this.classifyError(String(err));
         console.error('Ultra-low latency start error:', err);
