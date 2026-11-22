@@ -56,4 +56,11 @@ export const DEFAULT_OBS_PORT = 8765;
 export const DEFAULT_DISCOVERY_PORT = 8766;
 
 // Magic header for the TCP stream so OBS can identify the protocol
+// Header format (18 bytes total, little-endian):
+//   [4]  magic "OPTM" (0x4F 0x50 0x54 0x4D)
+//   [2]  sampleRate (uint16)
+//   [2]  channels   (uint16)
+//   [2]  bitDepth   (uint16)
+//   [8]  timestamp  (uint64, microseconds since epoch)
 export const STREAM_MAGIC = new Uint8Array([0x4F, 0x50, 0x54, 0x4D]); // "OPTM"
+export const STREAM_HEADER_SIZE = 18; // 4 + 2 + 2 + 2 + 8

@@ -76,6 +76,9 @@ struct ojowaptm_audio_data {
     std::atomic<bool> client_connected{false};
     std::string connected_ip;
     uint16_t listen_port = DEFAULT_OBS_PORT;
+
+    // Latency tracking
+    std::atomic<int> last_latency_ms{0};
 };
 
 #ifdef _WIN32
@@ -196,17 +199,18 @@ static void *net_thread_proc(void *param) {
                 obs_data_t *settings = obs_source_get_settings(source);
                 obs_data_set_string(settings, "connection_status", "Connected");
                 obs_data_set_string(settings, "connected_ip", client_ip);
+                obs_data_set_string(settings, "latency_ms", "0");
                 obs_source_update(source, settings);
                 obs_data_release(settings);
             }
             
             blog(LOG_INFO, "ojowaPTM: phone connected from %s", client_ip);
 
-            uint8_t header[10];
+            uint8_t header[18];
 
             while (data->running.load()) {
                 size_t header_offset = 0;
-                while (header_offset < 10 && data->running.load()) {
+                while (header_offset < 18 && data->running.load()) {
                     fd_set r;
                     FD_ZERO(&r);
                     FD_SET(client_fd, &r);
@@ -215,7 +219,7 @@ static void *net_thread_proc(void *param) {
                     int sel = select((int)client_fd + 1, &r, nullptr, nullptr, &timeout);
                     if (sel <= 0) continue;
 
-                    ssize_t n = recv(client_fd, reinterpret_cast<char *>(header + header_offset), static_cast<int>(10 - header_offset), 0);
+                    ssize_t n = recv(client_fd, reinterpret_cast<char *>(header + header_offset), static_cast<int>(18 - header_offset), 0);
                     if (n <= 0) {
                         if (SOCK_ERRNO == SOCK_EWOULDBLOCK || SOCK_ERRNO == SOCK_EAGAIN) continue;
                         goto disconnect;
@@ -232,9 +236,40 @@ static void *net_thread_proc(void *param) {
                 uint16_t sample_rate = header[4] | (header[5] << 8);
                 uint16_t channels = header[6] | (header[7] << 8);
                 uint16_t bit_depth = header[8] | (header[9] << 8);
+                // Timestamp at offset 10 (8 bytes = uint64 microseconds since epoch, little-endian)
+                uint64_t timestamp_us = (uint64_t)header[10] |
+                    ((uint64_t)header[11] << 8) |
+                    ((uint64_t)header[12] << 16) |
+                    ((uint64_t)header[13] << 24) |
+                    ((uint64_t)header[14] << 32) |
+                    ((uint64_t)header[15] << 40) |
+                    ((uint64_t)header[16] << 48) |
+                    ((uint64_t)header[17] << 56);
 
                 data->sample_rate = sample_rate;
                 data->channels = channels;
+
+                // Calculate latency: current time - sent timestamp
+                auto now = std::chrono::steady_clock::now();
+                auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+                int64_t latency_ms = (now_us - (int64_t)timestamp_us) / 1000;
+                if (latency_ms > 0 && latency_ms < 5000) { // sanity check
+                    blog(LOG_INFO, "ojowaPTM: latency %lld ms", (long long)latency_ms);
+                    data->last_latency_ms = (int)latency_ms;
+                    
+                    // Update OBS source properties with latency (throttled to ~1/sec)
+                    static int latency_update_counter = 0;
+                    if (++latency_update_counter >= 50) { // ~50 chunks/sec = 1 update/sec
+                        latency_update_counter = 0;
+                        obs_source_t *latency_src = data->source;
+                        if (latency_src) {
+                            obs_data_t *latency_settings = obs_source_get_settings(latency_src);
+                            obs_data_set_string(latency_settings, "latency_ms", std::to_string((int)latency_ms).c_str());
+                            obs_source_update(latency_src, latency_settings);
+                            obs_data_release(latency_settings);
+                        }
+                    }
+                }
 
                 uint8_t buf[4096];
                 while (data->running.load()) {
@@ -269,6 +304,7 @@ static void *net_thread_proc(void *param) {
             // Update connection status
             data->client_connected.store(false);
             data->connected_ip.clear();
+            data->last_latency_ms = 0;
             
             // Update OBS source properties to show disconnected
             obs_source_t *src = data->source;
@@ -276,6 +312,7 @@ static void *net_thread_proc(void *param) {
                 obs_data_t *settings = obs_source_get_settings(src);
                 obs_data_set_string(settings, "connection_status", "Disconnected");
                 obs_data_set_string(settings, "connected_ip", "");
+                obs_data_set_string(settings, "latency_ms", "0");
                 obs_source_update(src, settings);
                 obs_data_release(settings);
             }
@@ -620,6 +657,9 @@ static obs_properties_t *ojowaptm_audio_properties(void *data) {
     
     // Connected phone IP display
     obs_properties_add_text(props, "connected_ip", "Connected Phone IP", OBS_TEXT_INFO);
+    
+    // Latency display (read-only)
+    obs_properties_add_text(props, "latency_ms", "Latency (ms)", OBS_TEXT_INFO);
     
     // Port configuration (default 8765)
     obs_properties_add_int(props, "listen_port", "Listen Port", 1024, 65535, 1);

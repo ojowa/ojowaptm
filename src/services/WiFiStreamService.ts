@@ -181,12 +181,19 @@ export class WiFiStreamService {
 }
 
 function buildHeader(config: AudioConfig): Uint8Array {
-  const buf = new Uint8Array(10); // 4 magic + 2 + 2 + 2
+  const buf = new Uint8Array(STREAM_HEADER_SIZE); // 4 magic + 2 + 2 + 2 + 8
   buf.set(STREAM_MAGIC, 0);
-  const dv = new DataView(buf.buffer, 4, 6);
+  const dv = new DataView(buf.buffer, 4, 14);
   dv.setUint16(0, config.sampleRate, true);
   dv.setUint16(2, config.channels, true);
   dv.setUint16(4, config.bitDepth, true);
+  // Timestamp at offset 10 (8 bytes = uint64 microseconds since epoch)
+  const nowUs = BigInt(Date.now() * 1000);
+  // Write as two 32-bit parts (DataView doesn't have setBigUint64 in all RN versions)
+  const high = Number(nowUs >> 32n);
+  const low = Number(nowUs & 0xffffffffn);
+  dv.setUint32(6, high, true);
+  dv.setUint32(10, low, true);
   return buf;
 }
 
