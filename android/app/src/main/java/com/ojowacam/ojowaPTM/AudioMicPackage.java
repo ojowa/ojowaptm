@@ -17,7 +17,8 @@ public class AudioMicPackage implements ReactPackage {
                 new AudioMicModule(reactContext),
                 new UltraLowLatencyAudioModule(reactContext),
                 new PowerManagerModule(reactContext),
-                new NetworkInfoModule(reactContext)
+                new NetworkInfoModule(reactContext),
+                new ObsDiscoveryModule(reactContext)
         );
     }
 

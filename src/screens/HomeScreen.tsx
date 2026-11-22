@@ -17,6 +17,8 @@ import {
   StatusBar,
   Platform,
   PermissionsAndroid,
+  NativeModules,
+  NativeEventEmitter,
 } from 'react-native';
 import { AudioCaptureService } from '../services/AudioCaptureService';
 import { WiFiStreamService } from '../services/WiFiStreamService';
@@ -26,6 +28,18 @@ import { DEFAULT_AUDIO_CONFIG, DEFAULT_OBS_PORT, DEFAULT_DISCOVERY_PORT, AUDIO_S
 
 const DISCOVERY_MAGIC = 'OPTM_DISCOVER';
 const DISCOVERY_RESPONSE_MAGIC = 'OPTM_DISC_RESP';
+const DISCOVERY_TIMEOUT_MS = 4000;
+
+// Native UDP discovery module
+const { ObsDiscovery } = NativeModules as {
+  ObsDiscovery?: {
+    startDiscovery(): void;
+    stopDiscovery(): void;
+  }
+};
+
+// Event emitter for discovery responses
+const discoveryEmitter = new NativeEventEmitter(ObsDiscovery as any);
 
 // Custom keep-awake hook using native Wakelock
 const useKeepAwake = (enabled: boolean) => {
@@ -90,6 +104,7 @@ export default function HomeScreen() {
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [latencyMs, setLatencyMs] = useState<number>(0);
   const [lastSendTime, setLastSendTime] = useState<number>(0);
+  const discoverySubRef = useRef<any>(null);
 
   const toggleStream = async () => {
     if (state.isStreaming) {
@@ -207,20 +222,51 @@ export default function HomeScreen() {
     return () => {
       if (levelInterval) clearInterval(levelInterval);
       WiFiStreamService.disconnect();
+      if (discoverySubRef.current) {
+        discoverySubRef.current.remove();
+        discoverySubRef.current = null;
+      }
+      if (ObsDiscovery) {
+        ObsDiscovery.stopDiscovery();
+      }
     };
   }, []);
 
-  // Auto-discovery of OBS PC on local network (simplified - manual entry only)
-  // Note: Auto-discovery via UDP broadcast requires native modules
-  // For now, manual IP entry is used. Auto-discovery can be added later with a native module.
+  // Auto-discovery of OBS PC on local network via UDP broadcast
+  // Sends OPTM_DISCOVER to port 8766, listens for OPTM_DISC_RESP responses
   const discoverObsServers = useCallback(async () => {
+    if (!ObsDiscovery) {
+      Alert.alert('Discovery not available', 'Native discovery module not available on this platform.');
+      return;
+    }
     setIsDiscovering(true);
     setDiscoveredServers([]);
-    // Auto-discovery not implemented in JS bundle - requires native module
-    // For now, user must manually enter IP
+
+    // Set up listener for discovery responses
+    discoverySubRef.current = discoveryEmitter.addListener('onObsDiscovered', (event: {
+      ip: string;
+      port: number;
+      deviceName: string;
+    }) => {
+      setDiscoveredServers((prev) => {
+        // Avoid duplicates
+        if (prev.some((s) => s.ip === event.ip && s.port === event.port)) {
+          return prev;
+        }
+        return [...prev, { ip: event.ip, port: event.port, deviceName: event.deviceName }];
+      });
+    });
+
+    // Start native discovery (sends UDP broadcast, listens for 4 seconds)
+    ObsDiscovery.startDiscovery();
+
+    // Auto-stop after timeout (native module also has internal timeout)
     setTimeout(() => {
+      ObsDiscovery.stopDiscovery();
       setIsDiscovering(false);
-    }, 1000);
+      discoverySubRef.current?.remove();
+      discoverySubRef.current = null;
+    }, DISCOVERY_TIMEOUT_MS + 500);
   }, []);
 
   const handleDiscoverPress = useCallback(() => {
