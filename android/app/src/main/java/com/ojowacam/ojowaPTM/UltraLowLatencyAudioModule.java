@@ -270,6 +270,16 @@ public class UltraLowLatencyAudioModule extends ReactContextBaseJavaModule {
         return framesSent.get();
     }
 
+    @ReactMethod
+    public void addListener(String eventName) {
+        // Required by NativeEventEmitter on the JS side
+    }
+
+    @ReactMethod
+    public void removeListeners(double count) {
+        // Required by NativeEventEmitter on the JS side
+    }
+
     private void cleanup() {
         isRunning.set(false);
         try {

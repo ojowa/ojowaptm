@@ -21,7 +21,7 @@ import {
 import { AudioCaptureService } from '../services/AudioCaptureService';
 import { WiFiStreamService } from '../services/WiFiStreamService';
 import { UltraLowLatencyStreamService } from '../services/UltraLowLatencyStreamService';
-import type { AudioConfig, AudioSource, ObsConnection, StreamState, ObsServerInfo } from '../types';
+import type { AudioConfig, AudioSource, ObsConnection, StreamState, ObsServerInfo, StreamErrorType } from '../types';
 import { DEFAULT_AUDIO_CONFIG, DEFAULT_OBS_PORT, DEFAULT_DISCOVERY_PORT, AUDIO_SOURCE_OPTIONS } from '../types';
 
 const DISCOVERY_MAGIC = 'OPTM_DISCOVER';
@@ -76,6 +76,8 @@ export default function HomeScreen() {
     isMuted: false,
     level: 0,
     error: null,
+    errorType: null,
+    nativeError: null,
     obshost: null,
     obsport: null,
   });
@@ -180,7 +182,9 @@ export default function HomeScreen() {
 
   const updatePort = (text: string) => {
     const p = parseInt(text, 10) || DEFAULT_OBS_PORT;
-    setConnection((prev) => ({ ...prev, port: p }));
+    // Clamp to valid port range (1024–65535), matching OBS plugin
+    const port = Math.min(Math.max(p, 1024), 65535);
+    setConnection((prev) => ({ ...prev, port }));
   };
 
   const updateAudioSource = (source: AudioSource) => {
@@ -226,8 +230,13 @@ export default function HomeScreen() {
   }, []);
 
   const handleStateChange = useCallback(
-    ({ connected, error }: { connected: boolean; error: string | null }) => {
-      setState((prev) => ({ ...prev, isConnected: connected, error }));
+    ({ connected, error, errorType, nativeError }: {
+      connected: boolean;
+      error: string | null;
+      errorType: StreamErrorType | null;
+      nativeError: string | null;
+    }) => {
+      setState((prev) => ({ ...prev, isConnected: connected, error, errorType, nativeError }));
       if (connected) {
         setLastConnectedIP(connection.host);
       }
@@ -419,7 +428,24 @@ export default function HomeScreen() {
               : 'Idle'}
           </Text>
           {state.error && (
-            <Text style={styles.errorText}>{state.error}</Text>
+            <View>
+              <Text style={styles.errorText}>{state.error}</Text>
+              {state.errorType === 'network' && (
+                <Text style={styles.errorHint}>
+                  Tip: Make sure OBS is running with the ojowaPTM plugin listening on port {connection.port}.
+                </Text>
+              )}
+              {state.errorType === 'audio' && (
+                <Text style={styles.errorHint}>
+                  Tip: Grant microphone permission and check that the mic isn't in use by another app.
+                </Text>
+              )}
+              {state.errorType === 'config' && (
+                <Text style={styles.errorHint}>
+                  Tip: Check the OBS IP address and port settings.
+                </Text>
+              )}
+            </View>
           )}
         </View>
 
@@ -588,6 +614,11 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     marginTop: 8,
+  },
+  errorHint: {
+    color: '#8e93a0',
+    fontSize: 11,
+    marginTop: 4,
   },
   statusRow: {
     flexDirection: 'row',

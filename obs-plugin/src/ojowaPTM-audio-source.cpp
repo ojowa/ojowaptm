@@ -94,13 +94,16 @@ static int set_nonblocking(int fd) {
 }
 #endif
 
+static void *net_thread_proc(void *param);
+static std::string get_local_ip();
+
 static void *net_thread_proc(void *param) {
     ojowaptm_audio_data *data = static_cast<ojowaptm_audio_data *>(param);
 
 #ifdef _WIN32
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        blog(LOG_ERROR, "ojowaPTM: WSAStartup failed");
+        blog(LOG_ERROR, "ojowaPTM: WSAStartup failed (err=%d)", SOCK_ERRNO);
         return nullptr;
     }
 #endif
@@ -119,7 +122,7 @@ static void *net_thread_proc(void *param) {
 #else
     if (server_fd < 0) {
 #endif
-        blog(LOG_ERROR, "ojowaPTM: failed to create socket");
+        blog(LOG_ERROR, "ojowaPTM: failed to create socket (err=%d)", SOCK_ERRNO);
 #ifdef _WIN32
         WSACleanup();
 #endif
@@ -136,7 +139,7 @@ static void *net_thread_proc(void *param) {
     addr.sin_port = htons(listen_port);
 
     if (bind(server_fd, (sockaddr *)&addr, sizeof(addr)) < 0) {
-        blog(LOG_ERROR, "ojowaPTM: bind failed on port %d", listen_port);
+        blog(LOG_ERROR, "ojowaPTM: bind failed on port %d (err=%d). Is another instance of OBS or another app using this port?", listen_port, SOCK_ERRNO);
         SOCK_CLOSE(server_fd);
 #ifdef _WIN32
         WSACleanup();
@@ -145,7 +148,7 @@ static void *net_thread_proc(void *param) {
     }
 
     if (listen(server_fd, 1) < 0) {
-        blog(LOG_ERROR, "ojowaPTM: listen failed");
+        blog(LOG_ERROR, "ojowaPTM: listen failed (err=%d)", SOCK_ERRNO);
         SOCK_CLOSE(server_fd);
 #ifdef _WIN32
         WSACleanup();
@@ -154,6 +157,9 @@ static void *net_thread_proc(void *param) {
     }
 
     blog(LOG_INFO, "ojowaPTM: listening on port %d", listen_port);
+
+    std::string local_ip = get_local_ip();
+    blog(LOG_INFO, "ojowaPTM: OBS PC IP: %s", local_ip.c_str());
 
     fd_set readfds;
     timeval timeout;
@@ -173,7 +179,13 @@ static void *net_thread_proc(void *param) {
 
         if (FD_ISSET(server_fd, &readfds)) {
             SOCKET client_fd = accept(server_fd, nullptr, nullptr);
-            if (client_fd < 0 || client_fd == INVALID_SOCKET) continue;
+            if (client_fd < 0 || client_fd == INVALID_SOCKET) {
+                int err = SOCK_ERRNO;
+                if (err != SOCK_EWOULDBLOCK && err != SOCK_EAGAIN && err != SOCK_EINTR) {
+                    blog(LOG_ERROR, "ojowaPTM: accept failed (err=%d)", err);
+                }
+                continue;
+            }
 
             set_nonblocking(client_fd);
             blog(LOG_INFO, "ojowaPTM: phone connected");
@@ -221,7 +233,9 @@ static void *net_thread_proc(void *param) {
 
                     ssize_t n = recv(client_fd, reinterpret_cast<char *>(header + header_offset), static_cast<int>(18 - header_offset), 0);
                     if (n <= 0) {
-                        if (SOCK_ERRNO == SOCK_EWOULDBLOCK || SOCK_ERRNO == SOCK_EAGAIN) continue;
+                        int err = SOCK_ERRNO;
+                        if (err == SOCK_EWOULDBLOCK || err == SOCK_EAGAIN) continue;
+                        blog(LOG_ERROR, "ojowaPTM: header recv failed (err=%d)", err);
                         goto disconnect;
                     }
                     header_offset += (size_t)n;
@@ -229,7 +243,7 @@ static void *net_thread_proc(void *param) {
                 if (!data->running.load()) goto disconnect;
 
                 if (memcmp(header, STREAM_MAGIC, 4) != 0) {
-                    blog(LOG_WARNING, "ojowaPTM: bad magic, disconnecting");
+                    blog(LOG_WARNING, "ojowaPTM: bad magic from %s, disconnecting", client_ip);
                     goto disconnect;
                 }
 
@@ -283,7 +297,9 @@ static void *net_thread_proc(void *param) {
 
                     ssize_t n = recv(client_fd, reinterpret_cast<char *>(buf), static_cast<int>(sizeof(buf)), 0);
                     if (n <= 0) {
-                        if (SOCK_ERRNO == SOCK_EWOULDBLOCK || SOCK_ERRNO == SOCK_EAGAIN) continue;
+                        int err = SOCK_ERRNO;
+                        if (err == SOCK_EWOULDBLOCK || err == SOCK_EAGAIN) continue;
+                        blog(LOG_ERROR, "ojowaPTM: body recv failed (err=%d)", err);
                         goto disconnect;
                     }
 
@@ -326,9 +342,6 @@ static void *net_thread_proc(void *param) {
     return nullptr;
 }
 
-// Forward declaration
-static std::string get_local_ip();
-
 // Discovery thread for auto-discovery by phone app
 static void *discovery_thread_proc(void *param) {
     ojowaptm_audio_data *data = static_cast<ojowaptm_audio_data *>(param);
@@ -336,7 +349,7 @@ static void *discovery_thread_proc(void *param) {
 #ifdef _WIN32
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        blog(LOG_ERROR, "ojowaPTM: discovery WSAStartup failed");
+        blog(LOG_ERROR, "ojowaPTM: discovery WSAStartup failed (err=%d)", SOCK_ERRNO);
         return nullptr;
     }
 #endif
@@ -352,7 +365,7 @@ static void *discovery_thread_proc(void *param) {
 #else
     if (sockfd < 0) {
 #endif
-        blog(LOG_ERROR, "ojowaPTM: failed to create discovery socket");
+        blog(LOG_ERROR, "ojowaPTM: failed to create discovery socket (err=%d)", SOCK_ERRNO);
 #ifdef _WIN32
         WSACleanup();
 #endif
@@ -370,7 +383,7 @@ static void *discovery_thread_proc(void *param) {
     addr.sin_port = htons(DEFAULT_DISCOVERY_PORT);
 
     if (bind(sockfd, (sockaddr *)&addr, sizeof(addr)) < 0) {
-        blog(LOG_ERROR, "ojowaPTM: discovery bind failed on port %d", DEFAULT_DISCOVERY_PORT);
+        blog(LOG_ERROR, "ojowaPTM: discovery bind failed on port %d (err=%d)", DEFAULT_DISCOVERY_PORT, SOCK_ERRNO);
         SOCK_CLOSE(sockfd);
 #ifdef _WIN32
         WSACleanup();
@@ -567,10 +580,15 @@ static std::string get_local_ip() {
 }
 
 static void *ojowaptm_audio_create(obs_data_t *settings, obs_source_t *source) {
-    UNUSED_PARAMETER(settings);
     auto data = new ojowaptm_audio_data();
     data->source = source;
     data->running.store(true);
+
+    // Load listen port from settings (default 8765)
+    if (obs_data_has_user_value(settings, "listen_port")) {
+        data->listen_port = static_cast<uint16_t>(obs_data_get_int(settings, "listen_port"));
+    }
+
     data->net_thread = new std::thread(net_thread_proc, data);
     data->discovery_thread = new std::thread(discovery_thread_proc, data);
     

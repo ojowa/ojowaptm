@@ -13,12 +13,16 @@ export interface AudioConfig {
   audioSource: AudioSource;
 }
 
+export type StreamErrorType = 'network' | 'audio' | 'config' | 'unknown';
+
 export interface StreamState {
   isConnected: boolean;
   isStreaming: boolean;
   isMuted: boolean;
   level: number;           // 0..1 RMS
   error: string | null;
+  errorType: StreamErrorType | null;
+  nativeError: string | null;
   obshost: string | null;
   obsport: number | null;
 }
