@@ -1,0 +1,24 @@
+# Build outputs
+**/build/
+**/dist/
+**/.expo/
+**/node_modules/
+**/*.apk
+**/*.aab
+**/*.msi
+**/*.dll
+**/*.lib
+**/*.exp
+**/.gradle/
+**/local.properties
+**/*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
