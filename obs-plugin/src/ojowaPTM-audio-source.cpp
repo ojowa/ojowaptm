@@ -43,6 +43,7 @@
 #include <vector>
 #include <cstring>
 #include <cstdint>
+#include <string>
 
 // Required libobs module exports (obs_module_set_pointer / obs_module_ver).
 OBS_DECLARE_MODULE()
@@ -309,6 +310,9 @@ static void *net_thread_proc(void *param) {
     return nullptr;
 }
 
+// Forward declaration
+static std::string get_local_ip();
+
 // Discovery thread for auto-discovery by phone app
 static void *discovery_thread_proc(void *param) {
     ojowaptm_audio_data *data = static_cast<ojowaptm_audio_data *>(param);
@@ -371,7 +375,6 @@ static void *discovery_thread_proc(void *param) {
     while (data->running.load()) {
         FD_ZERO(&readfds);
         FD_SET(sockfd, &readfds);
-        timeval timeout;
         timeout.tv_sec = 0;
         timeout.tv_usec = 200000;
 
@@ -397,9 +400,10 @@ static void *discovery_thread_proc(void *param) {
             if (n >= (ssize_t)strlen(DISCOVERY_MAGIC) && 
                 memcmp(buf, DISCOVERY_MAGIC, strlen(DISCOVERY_MAGIC)) == 0) {
                 
-                // Send discovery response with actual listen_port
+                // Send discovery response with actual listen_port from data
+                uint16_t port = data->listen_port ? data->listen_port : DEFAULT_OBS_PORT;
                 std::string response = std::string("OPTM_DISC_RESP|") + 
-                    std::to_string(listen_port) + "|" + "OBS Studio";
+                    std::to_string(port) + "|" + "OBS Studio";
                 
                 sendto(sockfd, response.c_str(), response.length(), 0,
                        (sockaddr *)&client_addr, sizeof(client_addr));
