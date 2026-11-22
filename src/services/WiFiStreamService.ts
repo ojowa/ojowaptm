@@ -15,7 +15,7 @@
 
 import TcpSocket from 'react-native-tcp-socket';
 import type { AudioConfig, ObsConnection } from '../types';
-import { STREAM_MAGIC } from '../types';
+import { STREAM_MAGIC, STREAM_HEADER_SIZE } from '../types';
 
 // atob/btoa polyfills for React Native
 if (typeof globalThis.atob === 'undefined') {
@@ -188,10 +188,12 @@ function buildHeader(config: AudioConfig): Uint8Array {
   dv.setUint16(2, config.channels, true);
   dv.setUint16(4, config.bitDepth, true);
   // Timestamp at offset 10 (8 bytes = uint64 microseconds since epoch)
-  const nowUs = BigInt(Date.now() * 1000);
-  // Write as two 32-bit parts (DataView doesn't have setBigUint64 in all RN versions)
-  const high = Number(nowUs >> 32n);
-  const low = Number(nowUs & 0xffffffffn);
+  // Use regular numbers instead of BigInt for JSC compatibility
+  const nowMs = Date.now();
+  const nowUs = nowMs * 1000;
+  // Split into high/low 32-bit parts
+  const high = Math.floor(nowUs / 4294967296); // 2^32
+  const low = nowUs % 4294967296;
   dv.setUint32(6, high, true);
   dv.setUint32(10, low, true);
   return buf;
