@@ -173,7 +173,10 @@ export class UltraLowLatencyStreamService {
             let errorType: StreamErrorType = captured?.type ?? 'unknown';
 
             if (captured) {
-              error = `Failed to start capture: ${captured.message}`;
+              // captured.message already includes the native "Failed to start: " prefix
+              error = captured.message.startsWith('Failed to start:')
+                ? `Failed to start capture: ${captured.message.replace('Failed to start: ', '')}`
+                : `Failed to start capture: ${captured.message}`;
             } else {
               error = 'Ultra-low latency failed: not capturing';
             }
@@ -199,7 +202,9 @@ export class UltraLowLatencyStreamService {
         console.error('Ultra-low latency start error:', err);
         UltraLowLatencyStreamService.onStateChange?.({
           connected: false,
-          error: `Failed to start: ${captured.message}`,
+          error: captured.message.startsWith('Failed to start:')
+            ? captured.message.replace('Failed to start: ', '')
+            : `Failed to start: ${captured.message}`,
           errorType: captured.type,
           nativeError: String(err),
         });
