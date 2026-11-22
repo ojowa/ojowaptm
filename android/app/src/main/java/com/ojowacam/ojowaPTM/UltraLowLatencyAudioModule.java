@@ -175,6 +175,9 @@ public class UltraLowLatencyAudioModule extends ReactContextBaseJavaModule {
                     // Build packet: header + PCM
                     buildPacket(read);
                     
+                    // Copy PCM data from audioBuffer into packetBuffer after header
+                    System.arraycopy(audioBuffer, 0, packetBuffer, HEADER_SIZE, read);
+                    
                     // Non-blocking queue to network thread would be ideal,
                     // but for simplicity write directly (outputStream is buffered)
                     outputStream.write(packetBuffer, 0, HEADER_SIZE + read);
