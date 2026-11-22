@@ -20,11 +20,17 @@ const config = (async () => {
     },
     resolver: {
       assetExts: [...defaultConfig.resolver.assetExts, 'svg', 'ttf', 'otf', 'woff', 'woff2'],
-      extraNodeModules: {
-        'react-native/asset-registry': path.resolve(
-          __dirname,
-          'node_modules/@react-native/assets-registry'
-        ),
+      resolveRequest: (context, moduleName, platform) => {
+        if (moduleName === 'react-native/asset-registry') {
+          return {
+            filePath: path.resolve(
+              __dirname,
+              'node_modules/@react-native/assets-registry/registry.js'
+            ),
+            type: 'sourceFile',
+          };
+        }
+        return context.resolveRequest(context, moduleName, platform);
       },
     },
   });
