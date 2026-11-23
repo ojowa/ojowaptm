@@ -18,6 +18,7 @@ export type StreamErrorType = 'network' | 'audio' | 'config' | 'unknown';
 export interface StreamState {
   isConnected: boolean;
   isStreaming: boolean;
+  isConnecting: boolean;
   isMuted: boolean;
   level: number;           // 0..1 RMS
   error: string | null;

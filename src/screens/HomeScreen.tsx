@@ -87,6 +87,7 @@ export default function HomeScreen() {
   const [state, setState] = useState<StreamState>({
     isConnected: false,
     isStreaming: false,
+    isConnecting: false,
     isMuted: false,
     level: 0,
     error: null,
@@ -108,6 +109,7 @@ export default function HomeScreen() {
 
   const toggleStream = async () => {
     if (state.isStreaming) {
+      setState((prev) => ({ ...prev, isConnecting: true }));
       try {
         if (ultraLowLatency) {
           UltraLowLatencyStreamService.disconnect();
@@ -119,7 +121,7 @@ export default function HomeScreen() {
         console.error('Stop streaming error:', err);
       }
       if (levelInterval) clearInterval(levelInterval);
-      setState((prev) => ({ ...prev, isStreaming: false, isConnected: false, level: 0, error: null }));
+      setState((prev) => ({ ...prev, isConnecting: false, isStreaming: false, isConnected: false, level: 0, error: null }));
       return;
     }
 
@@ -146,13 +148,14 @@ export default function HomeScreen() {
       }
     }
 
-    setState((prev) => ({ ...prev, error: null }));
+    setState((prev) => ({ ...prev, error: null, isConnecting: true }));
 
     if (ultraLowLatency) {
       // Ultra-low latency path: native-only, bypasses JS bridge
       console.log('Starting ultra-low latency stream...');
       const connected = await UltraLowLatencyStreamService.connect(connection, handleStateChange);
       console.log('Ultra-low latency connect result:', connected);
+      setState((prev) => ({ ...prev, isConnecting: false }));
       if (!connected) {
         setState((prev) => ({ ...prev, error: 'Failed to start ultra-low latency mode.' }));
         return;
@@ -162,6 +165,7 @@ export default function HomeScreen() {
     } else {
       // Standard path: JS bridge
       const connected = await WiFiStreamService.connect(connection, handleStateChange);
+      setState((prev) => ({ ...prev, isConnecting: false }));
       if (!connected) {
         setState((prev) => ({ ...prev, error: 'Failed to connect to OBS. Check IP/port.' }));
         return;
@@ -436,7 +440,7 @@ export default function HomeScreen() {
             <Switch
               value={ultraLowLatency}
               onValueChange={setUltraLowLatency}
-              disabled={state.isStreaming}
+              disabled={state.isStreaming || state.isConnecting}
               thumbColor={ultraLowLatency ? '#30d158' : '#8e93a0'}
               trackColor={{ false: '#212833', true: '#1a3d2e' }}
             />
@@ -450,15 +454,17 @@ export default function HomeScreen() {
 
         <View style={styles.controls}>
           <TouchableOpacity
-            style={[styles.button, state.isStreaming ? styles.buttonLive : styles.buttonIdle]}
+            style={[styles.button, state.isStreaming ? styles.buttonLive : styles.buttonIdle, state.isConnecting && styles.buttonConnecting]}
             onPress={toggleStream}
+            disabled={state.isConnecting}
           >
+            <ActivityIndicator size="small" color="#fff" style={styles.buttonSpinner} />
             <Text style={styles.buttonText}>
-              {state.isStreaming ? 'STOP STREAMING' : 'START STREAMING'}
+              {state.isConnecting ? 'CONNECTING...' : state.isStreaming ? 'STOP STREAMING' : 'START STREAMING'}
             </Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.muteButton} onPress={toggleMute}>
+          <TouchableOpacity style={styles.muteButton} onPress={toggleMute} disabled={state.isConnecting}>
             <Text style={styles.muteText}>
               {state.isMuted ? 'UNMUTE' : 'MUTE MIC'}
             </Text>
@@ -604,6 +610,12 @@ const styles = StyleSheet.create({
   },
   buttonIdle: {
     opacity: 1,
+  },
+  buttonConnecting: {
+    opacity: 0.6,
+  },
+  buttonSpinner: {
+    marginRight: 8,
   },
   buttonText: {
     color: '#fff',
