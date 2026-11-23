@@ -160,45 +160,47 @@ export default function HomeScreen() {
 
     setState((prev) => ({ ...prev, error: null, isConnecting: true }));
 
-    if (ultraLowLatency) {
-      console.log('Starting ultra-low latency stream...');
-      const connected = await UltraLowLatencyStreamService.connect(connection, handleStateChange);
-      console.log('Ultra-low latency connect result:', connected);
-      setState((prev) => ({ ...prev, isConnecting: false }));
-      if (!connected) {
-        setState((prev) => ({ ...prev, error: 'Failed to start ultra-low latency mode.' }));
-        return;
-      }
-      setState((prev) => ({ ...prev, isStreaming: true }));
-      console.log('Ultra-low latency streaming started');
-    } else {
-      const connected = await WiFiStreamService.connect(connection, handleStateChange);
-      setState((prev) => ({ ...prev, isConnecting: false }));
-      if (!connected) {
-        setState((prev) => ({ ...prev, error: 'Failed to connect to OBS. Check IP/port.' }));
-        return;
-      }
-
-      const started = await AudioCaptureService.startCapture(
-        config,
-        (pcm) => {
-          if (!state.isMuted && WiFiStreamService.isConnected()) {
-            const sendTime = Date.now();
-            WiFiStreamService.sendPcm(config, pcm);
-          }
-        },
-        (level) => {
-          setState((prev) => ({ ...prev, level }));
+    try {
+      if (ultraLowLatency) {
+        console.log('Starting ultra-low latency stream...');
+        const connected = await UltraLowLatencyStreamService.connect(connection, handleStateChange);
+        console.log('Ultra-low latency connect result:', connected);
+        if (!connected) {
+          setState((prev) => ({ ...prev, error: 'Failed to start ultra-low latency mode.' }));
+          return;
         }
-      );
+        setState((prev) => ({ ...prev, isStreaming: true }));
+        console.log('Ultra-low latency streaming started');
+      } else {
+        const connected = await WiFiStreamService.connect(connection, handleStateChange);
+        if (!connected) {
+          setState((prev) => ({ ...prev, error: 'Failed to connect to OBS. Check IP/port.' }));
+          return;
+        }
 
-      if (!started) {
-        WiFiStreamService.disconnect();
-        setState((prev) => ({ ...prev, error: 'Failed to start microphone capture.' }));
-        return;
+        const started = await AudioCaptureService.startCapture(
+          config,
+          (pcm) => {
+            if (!state.isMuted && WiFiStreamService.isConnected()) {
+              const sendTime = Date.now();
+              WiFiStreamService.sendPcm(config, pcm);
+            }
+          },
+          (level) => {
+            setState((prev) => ({ ...prev, level }));
+          }
+        );
+
+        if (!started) {
+          WiFiStreamService.disconnect();
+          setState((prev) => ({ ...prev, error: 'Failed to start microphone capture.' }));
+          return;
+        }
+
+        setState((prev) => ({ ...prev, isStreaming: true }));
       }
-
-      setState((prev) => ({ ...prev, isStreaming: true }));
+    } finally {
+      setState((prev) => ({ ...prev, isConnecting: false }));
     }
   };
 
@@ -439,7 +441,7 @@ export default function HomeScreen() {
           onPress={toggleStream}
           disabled={state.isConnecting}
         >
-          <ActivityIndicator size="small" color="#fff" style={styles.buttonSpinner} />
+          {state.isConnecting && <ActivityIndicator size="small" color="#fff" style={styles.buttonSpinner} />}
           <Text style={styles.buttonText}>
             {state.isConnecting ? 'CONNECTING…' : state.isStreaming ? 'STOP STREAMING' : 'START STREAMING'}
           </Text>
