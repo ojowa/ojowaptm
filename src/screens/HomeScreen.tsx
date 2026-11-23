@@ -223,11 +223,6 @@ export default function HomeScreen() {
       } catch {
         setIpAddress('unknown');
       }
-
-      // Auto-discover OBS on app startup for a seamless experience
-      if (ObsDiscovery && connection.host === '') {
-        discoverObsServers();
-      }
     })();
   }, []);
 
