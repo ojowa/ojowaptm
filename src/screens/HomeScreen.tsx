@@ -72,6 +72,14 @@ const getIpAddress = async (): Promise<string> => {
   return 'unknown';
 };
 
+// Check if two IPs are likely on different /24 subnets
+const isDifferentSubnet = (ip1: string, ip2: string): boolean => {
+  const parts1 = ip1.split('.');
+  const parts2 = ip2.split('.');
+  if (parts1.length !== 4 || parts2.length !== 4) return false;
+  return parts1[0] !== parts2[0] || parts1[1] !== parts2[1] || parts1[2] !== parts2[2];
+};
+
 export default function HomeScreen() {
   const [config, setConfig] = useState<AudioConfig>(DEFAULT_AUDIO_CONFIG);
   const [connection, setConnection] = useState<ObsConnection>({
@@ -251,6 +259,25 @@ export default function HomeScreen() {
     }
   }, [discoveredServers, connection.host, state.lastConnectedIP]);
 
+  const testConnection = async () => {
+    if (!connection.host) {
+      Alert.alert('Enter OBS IP', 'Please type the IP address of the PC running OBS.');
+      return;
+    }
+    setState((prev) => ({ ...prev, isConnecting: true }));
+    try {
+      const connected = await UltraLowLatencyStreamService.connect(connection, handleStateChange);
+      if (connected) {
+        UltraLowLatencyStreamService.disconnect();
+        Alert.alert('Connection Test', 'Successfully connected to OBS!');
+      }
+    } catch (err) {
+      console.error('Connection test error:', err);
+    } finally {
+      setState((prev) => ({ ...prev, isConnecting: false }));
+    }
+  };
+
   const discoverObsServers = useCallback(async () => {
     if (!ObsDiscovery) {
       return;
@@ -378,6 +405,9 @@ export default function HomeScreen() {
             onChangeText={updatePort}
             keyboardType="numeric"
           />
+          <TouchableOpacity style={styles.testButton} onPress={testConnection} disabled={state.isConnecting}>
+            <Text style={styles.testButtonText}>Test</Text>
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -437,9 +467,18 @@ export default function HomeScreen() {
         <View style={styles.errorCard}>
           <Text style={styles.errorText}>{state.error}</Text>
           {state.errorType === 'network' && (
-            <Text style={styles.errorHint}>
-              Tip: Make sure OBS is running with the ojowaPTM plugin listening on port {connection.port}.
-            </Text>
+            <>
+              <Text style={styles.errorHint}>
+                Tip: Make sure OBS is running with the ojowaPTM plugin listening on port {connection.port}.
+              </Text>
+              {/* Subnet mismatch detection */}
+              {connection.host && ipAddress && ipAddress !== 'unknown' && isDifferentSubnet(ipAddress, connection.host) && (
+                <Text style={styles.errorHint}>
+                  Tip: Phone IP ({ipAddress}) and OBS IP ({connection.host}) are on different subnets.
+                  Make sure both devices are on the same WiFi network.
+                </Text>
+              )}
+            </>
           )}
           {state.errorType === 'audio' && (
             <Text style={styles.errorHint}>
@@ -583,6 +622,18 @@ const styles = StyleSheet.create({
   },
   inputPort: {
     width: 100,
+  },
+  testButton: {
+    backgroundColor: '#8e93a0',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  testButtonText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
   },
   sourceRow: {
     flexDirection: 'row',
