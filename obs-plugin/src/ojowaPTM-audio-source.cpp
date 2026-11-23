@@ -307,6 +307,11 @@ static void *net_thread_proc(void *param) {
                     chunk.insert(chunk.end(), buf, buf + n);
                     {
                         std::lock_guard<std::mutex> lock(data->queue_mutex);
+                        // Drop oldest chunk if queue is too large to prevent unbounded memory growth
+                        if (data->pcm_queue.size() >= 200) {
+                            data->pcm_queue.erase(data->pcm_queue.begin());
+                            blog(LOG_WARNING, "ojowaPTM: PCM queue full, dropped oldest chunk");
+                        }
                         data->pcm_queue.push_back(std::move(chunk));
                     }
                     data->queue_cv.notify_one();

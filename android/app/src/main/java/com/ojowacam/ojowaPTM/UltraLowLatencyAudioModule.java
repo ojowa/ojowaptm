@@ -3,6 +3,7 @@ package com.ojowacam.ojowaPTM;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
+import android.os.SystemClock;
 import android.util.Log;
 
 import com.facebook.react.bridge.ReactApplicationContext;
@@ -136,6 +137,7 @@ public class UltraLowLatencyAudioModule extends ReactContextBaseJavaModule {
             // Connect TCP socket
             socket = new Socket();
             socket.setTcpNoDelay(true); // Critical: disable Nagle
+            socket.setReuseAddress(true); // Allow rapid reconnect without EADDRINUSE
             socket.setSendBufferSize(64 * 1024); // 64KB send buffer
             Log.i(TAG, "Connecting TCP to " + serverHost + ":" + serverPort);
             socket.connect(new InetSocketAddress(serverHost, serverPort), 2000);
@@ -192,6 +194,7 @@ public class UltraLowLatencyAudioModule extends ReactContextBaseJavaModule {
                     Log.e(TAG, "Capture loop error", e);
                     sendError("Capture error: " + e.getMessage());
                 }
+                isRunning.set(false);
                 break;
             }
         }
@@ -205,6 +208,7 @@ public class UltraLowLatencyAudioModule extends ReactContextBaseJavaModule {
                 Thread.sleep(1000);
                 if (socket != null && socket.isClosed()) {
                     Log.w(TAG, "Socket closed unexpectedly");
+                    isRunning.set(false);
                     break;
                 }
             } catch (InterruptedException ignored) {}
@@ -230,8 +234,8 @@ public class UltraLowLatencyAudioModule extends ReactContextBaseJavaModule {
         packetBuffer[8] = 16;
         packetBuffer[9] = 0;
         
-        // Timestamp (8 bytes, LE) - microseconds since epoch
-        long nowUs = System.currentTimeMillis() * 1000L;
+        // Timestamp (8 bytes, LE) - microseconds since boot (monotonic clock, matches OBS steady_clock)
+        long nowUs = SystemClock.elapsedRealtimeNanos() / 1000L;
         for (int i = 0; i < 8; i++) {
             packetBuffer[10 + i] = (byte)((nowUs >> (i * 8)) & 0xFF);
         }
