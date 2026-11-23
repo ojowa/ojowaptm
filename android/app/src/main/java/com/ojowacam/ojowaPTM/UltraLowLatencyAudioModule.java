@@ -9,6 +9,7 @@ import android.util.Log;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
+import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.bridge.Arguments;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
@@ -244,32 +245,58 @@ public class UltraLowLatencyAudioModule extends ReactContextBaseJavaModule {
     }
 
     @ReactMethod
-    public void stopCapture() {
-        if (!isRunning.get()) return;
-        
+    public void stopCapture(Promise promise) {
+        if (!isRunning.get()) {
+            promise.resolve("already_stopped");
+            return;
+        }
+
+        // Signal threads to stop first
         isRunning.set(false);
-        
-        if (audioRecord != null) {
-            try { audioRecord.stop(); } catch (Exception ignored) {}
-            try { audioRecord.release(); } catch (Exception ignored) {}
-            audioRecord = null;
-        }
-        
-        if (outputStream != null) {
-            try { outputStream.close(); } catch (Exception ignored) {}
-        }
-        if (socket != null) {
-            try { socket.close(); } catch (Exception ignored) {}
-        }
-        
+
+        // Interrupt threads to unblock any blocking calls (e.g., audioRecord.read())
         if (captureThread != null) {
             captureThread.interrupt();
         }
         if (networkThread != null) {
             networkThread.interrupt();
         }
-        
+
+        // Wait for threads to finish before cleaning up resources
+        if (captureThread != null) {
+            try {
+                captureThread.join(5000); // wait up to 5 seconds
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            captureThread = null;
+        }
+        if (networkThread != null) {
+            try {
+                networkThread.join(5000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            networkThread = null;
+        }
+
+        // Now clean up resources safely
+        if (audioRecord != null) {
+            try { audioRecord.stop(); } catch (Exception ignored) {}
+            try { audioRecord.release(); } catch (Exception ignored) {}
+            audioRecord = null;
+        }
+
+        if (outputStream != null) {
+            try { outputStream.close(); } catch (Exception ignored) {}
+        }
+        if (socket != null) {
+            try { socket.close(); } catch (Exception ignored) {}
+        }
+
+        framesSent.set(0);
         Log.i(TAG, "Ultra-low latency capture STOPPED. Frames sent: " + framesSent.get());
+        promise.resolve("stopped");
     }
 
     @ReactMethod

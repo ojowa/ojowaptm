@@ -24,7 +24,7 @@ const { UltraLowLatencyAudio } = NativeModules as {
     setAudioSource(source: string): void;
     setServer(host: string, port: number): void;
     startCapture(): void;
-    stopCapture(): void;
+    stopCapture(): Promise<void>;
     isCapturing(): boolean;
     getFramesSent(): number;
   }
@@ -223,9 +223,13 @@ export class UltraLowLatencyStreamService {
     return UltraLowLatencyStreamService.isStreaming && (UltraLowLatencyAudio?.isCapturing() ?? false);
   }
 
-  static disconnect(): void {
+  static async disconnect(): Promise<boolean> {
     if (UltraLowLatencyAudio) {
-      try { UltraLowLatencyAudio.stopCapture(); } catch {}
+      try {
+        await UltraLowLatencyAudio.stopCapture();
+      } catch (err) {
+        console.error('UltraLowLatencyAudio stopCapture error:', err);
+      }
     }
     UltraLowLatencyStreamService.isStreaming = false;
     this.lastCaptureError = null;
@@ -236,6 +240,7 @@ export class UltraLowLatencyStreamService {
       errorType: null,
       nativeError: null,
     });
+    return true;
   }
 
   static getFramesSent(): number {

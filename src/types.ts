@@ -26,6 +26,7 @@ export interface StreamState {
   nativeError: string | null;
   obshost: string | null;
   obsport: number | null;
+  lastConnectedIP: string | null;
 }
 
 export interface ObsConnection {

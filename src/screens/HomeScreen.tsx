@@ -1,6 +1,7 @@
 /**
  * HomeScreen.tsx — ojowaPTM main screen.
- * Phone as Mic: stream your Android microphone to OBS over WiFi.
+ * Phone as Mic: connect to OBS and stream your Android microphone over WiFi.
+ * When streaming starts, renders StreamingScreen.
  */
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
@@ -23,6 +24,7 @@ import {
 import { AudioCaptureService } from '../services/AudioCaptureService';
 import { WiFiStreamService } from '../services/WiFiStreamService';
 import { UltraLowLatencyStreamService } from '../services/UltraLowLatencyStreamService';
+import StreamingScreen from './StreamingScreen';
 import type { AudioConfig, AudioSource, ObsConnection, StreamState, ObsServerInfo, StreamErrorType } from '../types';
 import { DEFAULT_AUDIO_CONFIG, DEFAULT_OBS_PORT, DEFAULT_DISCOVERY_PORT, AUDIO_SOURCE_OPTIONS } from '../types';
 
@@ -44,24 +46,21 @@ const discoveryEmitter = new NativeEventEmitter(ObsDiscovery as any);
 // Custom keep-awake hook using native Wakelock
 const useKeepAwake = (enabled: boolean) => {
   const wakeLockRef = useRef<any>(null);
-  
   useEffect(() => {
     if (Platform.OS === 'android' && enabled) {
-      // Acquire wake lock via native module
       const PowerManager = require('react-native').NativeModules.PowerManager;
       if (PowerManager && PowerManager.acquireWakeLock) {
         PowerManager.acquireWakeLock();
         wakeLockRef.current = true;
       }
     }
-    
     return () => {
       if (wakeLockRef.current) {
         const PowerManager = require('react-native').NativeModules.PowerManager;
         if (PowerManager && PowerManager.releaseWakeLock) {
           PowerManager.releaseWakeLock();
+          wakeLockRef.current = null;
         }
-        wakeLockRef.current = null;
       }
     };
   }, [enabled]);
@@ -95,36 +94,47 @@ export default function HomeScreen() {
     nativeError: null,
     obshost: null,
     obsport: null,
+    lastConnectedIP: null,
   });
   const [ipAddress, setIpAddress] = useState<string>('');
-  const [levelInterval, setLevelInterval] = useState<any>(null);
   const [audioSource, setAudioSource] = useState<AudioSource>('mic');
   const [ultraLowLatency, setUltraLowLatency] = useState<boolean>(false);
-  const [lastConnectedIP, setLastConnectedIP] = useState<string>('');
   const [discoveredServers, setDiscoveredServers] = useState<ObsServerInfo[]>([]);
   const [isDiscovering, setIsDiscovering] = useState(false);
-  const [latencyMs, setLatencyMs] = useState<number>(0);
-  const [lastSendTime, setLastSendTime] = useState<number>(0);
   const discoverySubRef = useRef<any>(null);
 
-  const toggleStream = async () => {
-    if (state.isStreaming) {
-      setState((prev) => ({ ...prev, isConnecting: true }));
-      try {
-        if (ultraLowLatency) {
-          UltraLowLatencyStreamService.disconnect();
-        } else {
-          await AudioCaptureService.stopCapture();
-          WiFiStreamService.disconnect();
-        }
-      } catch (err) {
-        console.error('Stop streaming error:', err);
-      }
-      if (levelInterval) clearInterval(levelInterval);
-      setState((prev) => ({ ...prev, isConnecting: false, isStreaming: false, isConnected: false, level: 0, error: null }));
-      return;
-    }
+  // ---- Handler functions (defined before use) ----
 
+  const toggleMute = () => {
+    setState((prev) => ({ ...prev, isMuted: !prev.isMuted }));
+  };
+
+  const handleStopStream = () => {
+    if (ultraLowLatency) {
+      UltraLowLatencyStreamService.disconnect();
+    } else {
+      AudioCaptureService.stopCapture();
+      WiFiStreamService.disconnect();
+    }
+    setState((prev) => ({ ...prev, isStreaming: false, isConnected: false, level: 0, error: null }));
+  };
+
+  const updateHost = (text: string) => {
+    setConnection((prev) => ({ ...prev, host: text }));
+  };
+
+  const updatePort = (text: string) => {
+    const p = parseInt(text, 10) || DEFAULT_OBS_PORT;
+    const port = Math.min(Math.max(p, 1024), 65535);
+    setConnection((prev) => ({ ...prev, port }));
+  };
+
+  const updateAudioSource = (source: AudioSource) => {
+    setAudioSource(source);
+    setConfig((prev) => ({ ...prev, audioSource: source }));
+  };
+
+  const toggleStream = async () => {
     if (!connection.host) {
       Alert.alert('Enter OBS IP', 'Please type the IP address of the PC running OBS.');
       return;
@@ -151,7 +161,6 @@ export default function HomeScreen() {
     setState((prev) => ({ ...prev, error: null, isConnecting: true }));
 
     if (ultraLowLatency) {
-      // Ultra-low latency path: native-only, bypasses JS bridge
       console.log('Starting ultra-low latency stream...');
       const connected = await UltraLowLatencyStreamService.connect(connection, handleStateChange);
       console.log('Ultra-low latency connect result:', connected);
@@ -163,7 +172,6 @@ export default function HomeScreen() {
       setState((prev) => ({ ...prev, isStreaming: true }));
       console.log('Ultra-low latency streaming started');
     } else {
-      // Standard path: JS bridge
       const connected = await WiFiStreamService.connect(connection, handleStateChange);
       setState((prev) => ({ ...prev, isConnecting: false }));
       if (!connected) {
@@ -176,7 +184,6 @@ export default function HomeScreen() {
         (pcm) => {
           if (!state.isMuted && WiFiStreamService.isConnected()) {
             const sendTime = Date.now();
-            setLastSendTime(sendTime);
             WiFiStreamService.sendPcm(config, pcm);
           }
         },
@@ -195,25 +202,22 @@ export default function HomeScreen() {
     }
   };
 
-  const toggleMute = () => {
-    setState((prev) => ({ ...prev, isMuted: !prev.isMuted }));
-  };
+  const handleStateChange = useCallback(
+    ({ connected, error, errorType, nativeError }: {
+      connected: boolean;
+      error: string | null;
+      errorType: StreamErrorType | null;
+      nativeError: string | null;
+    }) => {
+      setState((prev) => ({ ...prev, isConnected: connected, error, errorType, nativeError, lastConnectedIP: connection.host }));
+      if (!connected) {
+        setState((prev) => ({ ...prev, isStreaming: false }));
+      }
+    },
+    [connection.host]
+  );
 
-  const updateHost = (text: string) => {
-    setConnection((prev) => ({ ...prev, host: text }));
-  };
-
-  const updatePort = (text: string) => {
-    const p = parseInt(text, 10) || DEFAULT_OBS_PORT;
-    // Clamp to valid port range (1024–65535), matching OBS plugin
-    const port = Math.min(Math.max(p, 1024), 65535);
-    setConnection((prev) => ({ ...prev, port }));
-  };
-
-  const updateAudioSource = (source: AudioSource) => {
-    setAudioSource(source);
-    setConfig((prev) => ({ ...prev, audioSource: source }));
-  };
+  // ---- Effects ----
 
   useEffect(() => {
     (async () => {
@@ -228,7 +232,6 @@ export default function HomeScreen() {
 
   useEffect(() => {
     return () => {
-      if (levelInterval) clearInterval(levelInterval);
       WiFiStreamService.disconnect();
       if (discoverySubRef.current) {
         discoverySubRef.current.remove();
@@ -241,12 +244,11 @@ export default function HomeScreen() {
   }, []);
 
   // Auto-populate connection when exactly one OBS is discovered
-  // and user hasn't entered an IP yet — makes it seamless
   useEffect(() => {
     if (
       discoveredServers.length === 1 &&
       connection.host === '' &&
-      lastConnectedIP === ''
+      state.lastConnectedIP === ''
     ) {
       const server = discoveredServers[0];
       setConnection((prev) => ({ ...prev, host: server.ip, port: server.port }));
@@ -256,10 +258,8 @@ export default function HomeScreen() {
         [{ text: 'OK' }]
       );
     }
-  }, [discoveredServers, connection.host, lastConnectedIP]);
+  }, [discoveredServers, connection.host, state.lastConnectedIP]);
 
-  // Auto-discovery of OBS PC on local network via UDP broadcast
-  // Sends OPTM_DISCOVER to port 8766, listens for OPTM_DISC_RESP responses
   const discoverObsServers = useCallback(async () => {
     if (!ObsDiscovery) {
       return;
@@ -267,14 +267,12 @@ export default function HomeScreen() {
     setIsDiscovering(true);
     setDiscoveredServers([]);
 
-    // Set up listener for discovery responses
     discoverySubRef.current = discoveryEmitter.addListener('onObsDiscovered', (event: {
       ip: string;
       port: number;
       deviceName: string;
     }) => {
       setDiscoveredServers((prev) => {
-        // Avoid duplicates
         if (prev.some((s) => s.ip === event.ip && s.port === event.port)) {
           return prev;
         }
@@ -282,10 +280,8 @@ export default function HomeScreen() {
       });
     });
 
-    // Start native discovery (sends UDP broadcast, listens for 4 seconds)
     ObsDiscovery.startDiscovery();
 
-    // Auto-stop after timeout (native module also has internal timeout)
     setTimeout(() => {
       ObsDiscovery.stopDiscovery();
       setIsDiscovering(false);
@@ -298,234 +294,188 @@ export default function HomeScreen() {
     discoverObsServers();
   }, []);
 
-  const handleStateChange = useCallback(
-    ({ connected, error, errorType, nativeError }: {
-      connected: boolean;
-      error: string | null;
-      errorType: StreamErrorType | null;
-      nativeError: string | null;
-    }) => {
-      setState((prev) => ({ ...prev, isConnected: connected, error, errorType, nativeError }));
-      if (connected) {
-        setLastConnectedIP(connection.host);
-      }
-      if (!connected) {
-        setState((prev) => ({ ...prev, isStreaming: false }));
-      }
-    },
-    [connection.host]
-  );
-
   useKeepAwake(state.isStreaming);
+
+  // ---- Render ----
+
+  // Render streaming screen when active
+  if (state.isStreaming) {
+    return (
+      <StreamingScreen
+        config={config}
+        connection={connection}
+        state={state}
+        ultraLowLatency={ultraLowLatency}
+        onStop={handleStopStream}
+        onToggleMute={toggleMute}
+        onToggleUltraLowLatency={setUltraLowLatency}
+        onUpdateAudioSource={updateAudioSource}
+        audioSource={audioSource}
+      />
+    );
+  }
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <StatusBar barStyle="light-content" />
 
-        <View style={styles.header}>
-          <Text style={styles.title}>ojowaPTM</Text>
-          <Text style={styles.subtitle}>Phone as Mic for OBS</Text>
-        </View>
+      {/* Header */}
+      <View style={styles.header}>
+        <Text style={styles.title}>ojowaPTM</Text>
+        <Text style={styles.subtitle}>Phone as Mic for OBS</Text>
+      </View>
 
-        <View style={styles.card}>
-          <View style={styles.statusRow}>
-            <Text style={styles.sectionTitle}>Connection Status</Text>
-            <View style={[
-              styles.statusIndicator,
-              state.isConnected ? styles.statusConnected : styles.statusDisconnected
-            ]}>
-              <Text style={styles.statusText}>
-                {state.isConnected ? 'Connected' : 'Disconnected'}
-              </Text>
-            </View>
+      {/* Connection Status */}
+      <View style={styles.card}>
+        <View style={styles.statusRow}>
+          <Text style={styles.sectionTitle}>Connection</Text>
+          <View style={[styles.statusBadge, state.isConnected ? styles.statusConnected : state.isConnecting ? styles.statusConnecting : styles.statusIdle]}>
+            <Text style={styles.statusText}>
+              {state.isConnected ? 'CONNECTED' : state.isConnecting ? 'CONNECTING…' : 'DISCONNECTED'}
+            </Text>
           </View>
-          <View style={styles.statusRow}>
-            <Text style={styles.sectionTitle}>Your Phone IP</Text>
-            <Text style={styles.ipText}>{ipAddress}</Text>
-          </View>
-          {lastConnectedIP && (
-            <View style={styles.statusRow}>
-              <Text style={styles.sectionTitle}>Last Connected To</Text>
-              <Text style={styles.ipText}>{lastConnectedIP}:{DEFAULT_OBS_PORT}</Text>
-            </View>
-          )}
-          <Text style={styles.ipHint}>
-            Enter the OBS PC IP below to stream to it
-          </Text>
         </View>
+        {state.lastConnectedIP && (
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Last Connected</Text>
+            <Text style={styles.infoValue}>{state.lastConnectedIP}:{DEFAULT_OBS_PORT}</Text>
+          </View>
+        )}
+      </View>
 
-        <View style={styles.card}>
-          <View>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>OBS PC (WiFi)</Text>
+      {/* Your Phone IP */}
+      <View style={styles.card}>
+        <View style={styles.infoRow}>
+          <Text style={styles.infoLabel}>Your Phone IP</Text>
+          <Text style={styles.infoValue}>{ipAddress}</Text>
+        </View>
+      </View>
+
+      {/* OBS PC Configuration */}
+      <View style={styles.card}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>OBS PC (WiFi)</Text>
+          <TouchableOpacity style={styles.discoverButton} onPress={handleDiscoverPress} disabled={isDiscovering}>
+            <Text style={styles.discoverButtonText}>{isDiscovering ? 'Scanning…' : 'Scan for OBS'}</Text>
+          </TouchableOpacity>
+        </View>
+        {isDiscovering && <ActivityIndicator size="small" color="#0a84ff" style={styles.smallSpinner} />}
+        {discoveredServers.length > 0 && (
+          <View style={styles.discoveredList}>
+            <Text style={styles.discoveredTitle}>Discovered OBS Servers</Text>
+            {discoveredServers.map((server, index) => (
               <TouchableOpacity
-                style={styles.discoverButton}
-                onPress={handleDiscoverPress}
-                disabled={isDiscovering}
+                key={index}
+                style={styles.discoveredItem}
+                onPress={() => setConnection(prev => ({ ...prev, host: server.ip, port: server.port }))}
               >
-                <Text style={styles.discoverButtonText}>
-                  {isDiscovering ? 'Scanning...' : 'Scan for OBS'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-            {isDiscovering && <ActivityIndicator size="small" color="#0a84ff" style={{marginTop: 8}} />}
-            {discoveredServers.length > 0 && (
-              <View style={styles.discoveredList}>
-                <Text style={styles.discoveredTitle}>Discovered OBS Servers:</Text>
-                {discoveredServers.map((server, index) => (
-                  <TouchableOpacity
-                    key={index}
-                    style={styles.discoveredItem}
-                    onPress={() => {
-                      setConnection(prev => ({ ...prev, host: server.ip, port: server.port }));
-                    }}
-                  >
-                    <View style={styles.discoveredItemInfo}>
-                      <Text style={styles.discoveredItemIp}>{server.ip}:{server.port}</Text>
-                      <Text style={styles.discoveredItemName}>{server.deviceName || 'OBS Studio'}</Text>
-                    </View>
-                    <Text style={styles.discoveredItemArrow}>▶</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-            <View>
-              <TextInput
-                style={styles.input}
-                placeholder="OBS PC IP address (e.g., 192.168.1.100)"
-                value={connection.host}
-                onChangeText={updateHost}
-                autoCapitalize="none"
-                spellCheck={false}
-              />
-              <TextInput
-                style={styles.input}
-                placeholder="Port"
-                value={String(connection.port)}
-                onChangeText={updatePort}
-                keyboardType="numeric"
-              />
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Audio Source</Text>
-          <View style={styles.sourceRow}>
-            {AUDIO_SOURCE_OPTIONS.map((opt) => (
-              <TouchableOpacity
-                key={opt.value}
-                style={[
-                  styles.sourceButton,
-                  audioSource === opt.value ? styles.sourceButtonActive : null,
-                ]}
-                onPress={() => updateAudioSource(opt.value)}
-              >
-                <Text style={[styles.sourceText, audioSource === opt.value ? styles.sourceTextActive : null]}>
-                  {opt.label}
-                </Text>
+                <View style={styles.discoveredItemInfo}>
+                  <Text style={styles.discoveredItemIp}>{server.ip}:{server.port}</Text>
+                  <Text style={styles.discoveredItemName}>{server.deviceName || 'OBS Studio'}</Text>
+                </View>
+                <Text style={styles.discoveredItemArrow}>▶</Text>
               </TouchableOpacity>
             ))}
           </View>
+        )}
+        <View style={styles.inputs}>
+          <TextInput
+            style={styles.input}
+            placeholder="OBS PC IP address"
+            value={connection.host}
+            onChangeText={updateHost}
+            autoCapitalize="none"
+            spellCheck={false}
+          />
+          <TextInput
+            style={[styles.input, styles.inputPort]}
+            placeholder="Port"
+            value={String(connection.port)}
+            onChangeText={updatePort}
+            keyboardType="numeric"
+          />
         </View>
+      </View>
 
-        <View style={styles.card}>
-          <View style={styles.toggleRow}>
-            <Text style={styles.sectionTitle}>Ultra-Low Latency</Text>
-            <Switch
-              value={ultraLowLatency}
-              onValueChange={setUltraLowLatency}
-              disabled={state.isStreaming || state.isConnecting}
-              thumbColor={ultraLowLatency ? '#30d158' : '#8e93a0'}
-              trackColor={{ false: '#212833', true: '#1a3d2e' }}
-            />
-          </View>
-          <Text style={styles.helpText}>
-            {ultraLowLatency
-              ? 'Native-only path: 5ms chunks, no JS bridge (~8-15ms latency)'
-              : 'Standard path: JS bridge, 20ms chunks (~35-75ms latency)'}
+      {/* Audio Source */}
+      <View style={styles.card}>
+        <Text style={styles.sectionTitle}>Audio Source</Text>
+        <View style={styles.sourceRow}>
+          {AUDIO_SOURCE_OPTIONS.map((opt) => (
+            <TouchableOpacity
+              key={opt.value}
+              style={[styles.sourceButton, audioSource === opt.value ? styles.sourceButtonActive : null]}
+              onPress={() => updateAudioSource(opt.value)}
+            >
+              <Text style={[styles.sourceText, audioSource === opt.value ? styles.sourceTextActive : null]}>
+                {opt.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+
+      {/* Ultra-Low Latency Toggle */}
+      <View style={styles.card}>
+        <View style={styles.toggleRow}>
+          <Text style={styles.sectionTitle}>Ultra-Low Latency</Text>
+          <Switch
+            value={ultraLowLatency}
+            onValueChange={setUltraLowLatency}
+            disabled={state.isStreaming || state.isConnecting}
+            thumbColor={ultraLowLatency ? '#30d158' : '#8e93a0'}
+            trackColor={{ false: '#212833', true: '#1a3d2e' }}
+          />
+        </View>
+        <Text style={styles.helpText}>
+          {ultraLowLatency ? 'Native-only: ~8-15ms latency' : 'Standard JS bridge: ~35-75ms latency'}
+        </Text>
+      </View>
+
+      {/* Main Controls */}
+      <View style={styles.controls}>
+        <TouchableOpacity
+          style={[styles.button, state.isStreaming ? styles.buttonLive : styles.buttonIdle, state.isConnecting && styles.buttonConnecting]}
+          onPress={toggleStream}
+          disabled={state.isConnecting}
+        >
+          <ActivityIndicator size="small" color="#fff" style={styles.buttonSpinner} />
+          <Text style={styles.buttonText}>
+            {state.isConnecting ? 'CONNECTING…' : state.isStreaming ? 'STOP STREAMING' : 'START STREAMING'}
           </Text>
-        </View>
+        </TouchableOpacity>
 
-        <View style={styles.controls}>
-          <TouchableOpacity
-            style={[styles.button, state.isStreaming ? styles.buttonLive : styles.buttonIdle, state.isConnecting && styles.buttonConnecting]}
-            onPress={toggleStream}
-            disabled={state.isConnecting}
-          >
-            <ActivityIndicator size="small" color="#fff" style={styles.buttonSpinner} />
-            <Text style={styles.buttonText}>
-              {state.isConnecting ? 'CONNECTING...' : state.isStreaming ? 'STOP STREAMING' : 'START STREAMING'}
+        <TouchableOpacity style={styles.muteButton} onPress={toggleMute} disabled={state.isConnecting || !state.isConnected}>
+          <Text style={[styles.muteText, state.isMuted && styles.muteTextActive]}>
+            {state.isMuted ? 'UNMUTE' : 'MUTE MIC'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Error Display */}
+      {state.error && (
+        <View style={styles.errorCard}>
+          <Text style={styles.errorText}>{state.error}</Text>
+          {state.errorType === 'network' && (
+            <Text style={styles.errorHint}>
+              Tip: Make sure OBS is running with the ojowaPTM plugin listening on port {connection.port}.
             </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.muteButton} onPress={toggleMute} disabled={state.isConnecting}>
-            <Text style={styles.muteText}>
-              {state.isMuted ? 'UNMUTE' : 'MUTE MIC'}
+          )}
+          {state.errorType === 'audio' && (
+            <Text style={styles.errorHint}>
+              Tip: Grant microphone permission and check the mic isn't in use by another app.
             </Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.meterCard}>
-          <Text style={styles.sectionTitle}>Mic Level</Text>
-          <View style={styles.meterTrack}>
-            <View style={[styles.meterFill, { width: state.level * 100 + '%' }]} />
-          </View>
-          <Text style={styles.levelText}>
-            {Math.round(state.level * 100)}%
-          </Text>
-        </View>
-
-        <View style={styles.meterCard}>
-          <Text style={styles.sectionTitle}>Latency</Text>
-          <View style={styles.meterTrack}>
-            <View style={[styles.meterFill, { width: Math.min(latencyMs / 200, 1) * 100 + '%' }]} />
-          </View>
-          <Text style={styles.levelText}>
-            {latencyMs > 0 ? `${latencyMs} ms` : '—'}
-          </Text>
-          <Text style={styles.latencyDetail}>
-            {lastSendTime > 0 ? `Last send: ${Date.now() - lastSendTime} ms ago` : 'Waiting...'}
-          </Text>
-        </View>
-
-        <View style={styles.statusCard}>
-          <Text style={styles.statusLabel}>Status:</Text>
-          <Text style={[styles.statusValue, state.isStreaming ? styles.statusLive : styles.statusIdle]}>
-            {state.isStreaming
-              ? `Streaming to ${connection.host}:${connection.port}`
-              : state.isConnected
-              ? 'Connected to OBS'
-              : 'Idle'}
-          </Text>
-          {state.error && (
-            <View>
-              <Text style={styles.errorText}>{state.error}</Text>
-              {state.errorType === 'network' && (
-                <Text style={styles.errorHint}>
-                  Tip: Make sure OBS is running with the ojowaPTM plugin listening on port {connection.port}.
-                </Text>
-              )}
-              {state.errorType === 'audio' && (
-                <Text style={styles.errorHint}>
-                  Tip: Grant microphone permission and check that the mic isn't in use by another app.
-                </Text>
-              )}
-              {state.errorType === 'config' && (
-                <Text style={styles.errorHint}>
-                  Tip: Check the OBS IP address and port settings.
-                </Text>
-              )}
-            </View>
+          )}
+          {state.errorType === 'config' && (
+            <Text style={styles.errorHint}>
+              Tip: Check the OBS IP address and port settings.
+            </Text>
           )}
         </View>
-
-        {state.isStreaming && (
-          <ActivityIndicator size="large" color="#0a84ff" style={styles.spinner} />
-        )}
-      </ScrollView>
-    );
-  }
+      )}
+    </ScrollView>
+  );
+}
 
 const styles = StyleSheet.create({
   container: {
@@ -559,26 +509,90 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#212833',
   },
+  statusRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+  },
+  statusConnected: {
+    backgroundColor: '#1a3d2e',
+    borderWidth: 1,
+    borderColor: '#30d158',
+  },
+  statusConnecting: {
+    backgroundColor: '#3d3a1a',
+    borderWidth: 1,
+    borderColor: '#f0b429',
+  },
+  statusIdle: {
+    backgroundColor: '#3d1a1a',
+    borderWidth: 1,
+    borderColor: '#ff453a',
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 8,
+  },
+  infoLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#8e93a0',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  infoValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#c9d1d9',
+    fontFamily: 'monospace',
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
   sectionTitle: {
     fontSize: 12,
     fontWeight: '700',
     color: '#8e93a0',
     textTransform: 'uppercase',
     letterSpacing: 1,
-    marginBottom: 10,
   },
-  ipText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#0a84ff',
-    fontFamily: 'monospace',
+  discoverButton: {
+    backgroundColor: '#0a84ff',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
   },
-  ipHint: {
-    fontSize: 12,
-    color: '#8e93a0',
-    marginTop: 4,
+  discoverButtonText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  smallSpinner: {
+    marginTop: 8,
+  },
+  inputs: {
+    flexDirection: 'row',
+    gap: 8,
   },
   input: {
+    flex: 1,
     backgroundColor: '#0d1117',
     borderWidth: 1,
     borderColor: '#30363d',
@@ -586,25 +600,63 @@ const styles = StyleSheet.create({
     color: '#c9d1d9',
     padding: 12,
     fontSize: 15,
-    marginBottom: 10,
+  },
+  inputPort: {
+    width: 100,
+  },
+  sourceRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  sourceButton: {
+    backgroundColor: '#212833',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: '#30363d',
+  },
+  sourceButtonActive: {
+    backgroundColor: '#0a84ff',
+    borderColor: '#0a84ff',
+  },
+  sourceText: {
+    color: '#8e93a0',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  sourceTextActive: {
+    color: '#ffffff',
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  helpText: {
+    fontSize: 11,
+    color: '#8e93a0',
+    marginTop: 4,
   },
   controls: {
     flexDirection: 'row',
     gap: 12,
-    marginBottom: 20,
+    marginBottom: 24,
   },
   button: {
     flex: 1,
-    backgroundColor: '#0a84ff',
-    borderRadius: 14,
-    paddingVertical: 16,
+    borderRadius: 16,
+    paddingVertical: 18,
     alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
   },
   buttonLive: {
     backgroundColor: '#ff453a',
   },
   buttonIdle: {
-    opacity: 1,
+    backgroundColor: '#0a84ff',
   },
   buttonConnecting: {
     opacity: 0.6,
@@ -614,7 +666,7 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     color: '#fff',
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '700',
   },
   muteButton: {
@@ -629,158 +681,27 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
-  meterCard: {
-    backgroundColor: '#161b22',
-    borderRadius: 16,
-    padding: 18,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#212833',
-    alignItems: 'center',
-  },
-  meterTrack: {
-    width: '100%',
-    height: 12,
-    backgroundColor: '#212833',
-    borderRadius: 6,
-    overflow: 'hidden',
-    marginBottom: 8,
-  },
-  meterFill: {
-    height: '100%',
-    backgroundColor: '#30d158',
-    width: '0%',
-  },
-  levelText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#c9d1d9',
-  },
-  latencyDetail: {
-    fontSize: 11,
-    color: '#8e93a0',
-    marginTop: 4,
-  },
-  statusCard: {
-    backgroundColor: '#161b22',
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#212833',
-  },
-  statusLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#8e93a0',
-    textTransform: 'uppercase',
-    marginBottom: 6,
-  },
-  statusValue: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#c9d1d9',
-  },
-  statusLive: {
+  muteTextActive: {
     color: '#30d158',
   },
-  statusIdle: {
-    color: '#8e93a0',
+  errorCard: {
+    backgroundColor: '#3d1a1a',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#ff453a',
   },
   errorText: {
     color: '#ff453a',
     fontSize: 13,
     fontWeight: '600',
-    marginTop: 8,
+    marginBottom: 4,
   },
   errorHint: {
     color: '#8e93a0',
     fontSize: 11,
-    marginTop: 4,
-  },
-  statusRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  statusIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  statusConnected: {
-    backgroundColor: '#1a3d2e',
-    borderWidth: 1,
-    borderColor: '#30d158',
-  },
-  statusDisconnected: {
-    backgroundColor: '#3d1a1a',
-    borderWidth: 1,
-    borderColor: '#ff453a',
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#ffffff',
-  },
-  sourceRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 4,
-  },
-  sourceButton: {
-    backgroundColor: '#212833',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  sourceButtonActive: {
-    backgroundColor: '#0a84ff',
-    borderColor: '#0a84ff',
-  },
-  sourceText: {
-    color: '#8e93a0',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  sourceTextActive: {
-    color: '#ffffff',
-  },
-  toggleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  helpText: {
-    fontSize: 11,
-    color: '#8e93a0',
-    marginTop: 4,
-  },
-  spinner: {
-    marginTop: 16,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  discoverButton: {
-    backgroundColor: '#0a84ff',
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  discoverButtonText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
+    marginBottom: 2,
   },
   discoveredList: {
     marginTop: 12,
@@ -824,963 +745,5 @@ const styles = StyleSheet.create({
   discoveredItemArrow: {
     color: '#8e93a0',
     fontSize: 16,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  discoverButton: {
-    backgroundColor: '#0a84ff',
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  discoverButtonText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  discoveredList: {
-    marginTop: 12,
-    padding: 12,
-    backgroundColor: '#161b22',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  discoveredTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#8e93a0',
-    marginBottom: 8,
-  },
-  discoveredItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 12,
-    backgroundColor: '#0d1117',
-    borderRadius: 8,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  discoveredItemInfo: {
-    flex: 1,
-  },
-  discoveredItemIp: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#0a84ff',
-    fontFamily: 'monospace',
-  },
-  discoveredItemName: {
-    fontSize: 12,
-    color: '#8e93a0',
-    marginTop: 2,
-  },
-  discoveredItemArrow: {
-    color: '#8e93a0',
-    fontSize: 16,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  discoverButton: {
-    backgroundColor: '#0a84ff',
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  discoverButtonText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  discoveredList: {
-    marginTop: 12,
-    padding: 12,
-    backgroundColor: '#161b22',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  discoveredTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#8e93a0',
-    marginBottom: 8,
-  },
-  discoveredItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 12,
-    backgroundColor: '#0d1117',
-    borderRadius: 8,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  discoveredItemInfo: {
-    flex: 1,
-  },
-  discoveredItemIp: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#0a84ff',
-    fontFamily: 'monospace',
-  },
-  discoveredItemName: {
-    fontSize: 12,
-    color: '#8e93a0',
-    marginTop: 2,
-  },
-  discoveredItemArrow: {
-    color: '#8e93a0',
-    fontSize: 16,
-  },
-  statusRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  statusIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  statusConnected: {
-    backgroundColor: '#1a3d2e',
-    borderWidth: 1,
-    borderColor: '#30d158',
-  },
-  statusDisconnected: {
-    backgroundColor: '#3d1a1a',
-    borderWidth: 1,
-    borderColor: '#ff453a',
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#ffffff',
-  },
-  sourceRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 4,
-  },
-  sourceButton: {
-    backgroundColor: '#212833',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  sourceButtonActive: {
-    backgroundColor: '#0a84ff',
-    borderColor: '#0a84ff',
-  },
-  sourceText: {
-    color: '#8e93a0',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  sourceTextActive: {
-    color: '#ffffff',
-  },
-  toggleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  helpText: {
-    fontSize: 11,
-    color: '#8e93a0',
-    marginTop: 4,
-  },
-  spinner: {
-    marginTop: 16,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  discoverButton: {
-    backgroundColor: '#0a84ff',
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  discoverButtonText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  discoveredList: {
-    marginTop: 12,
-    padding: 12,
-    backgroundColor: '#161b22',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  discoveredTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#8e93a0',
-    marginBottom: 8,
-  },
-  discoveredItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 12,
-    backgroundColor: '#0d1117',
-    borderRadius: 8,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  discoveredItemInfo: {
-    flex: 1,
-  },
-  discoveredItemIp: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#0a84ff',
-    fontFamily: 'monospace',
-  },
-  discoveredItemName: {
-    fontSize: 12,
-    color: '#8e93a0',
-    marginTop: 2,
-  },
-  discoveredItemArrow: {
-    color: '#8e93a0',
-    fontSize: 16,
-  },
-  statusRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  statusIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  statusConnected: {
-    backgroundColor: '#1a3d2e',
-    borderWidth: 1,
-    borderColor: '#30d158',
-  },
-  statusDisconnected: {
-    backgroundColor: '#3d1a1a',
-    borderWidth: 1,
-    borderColor: '#ff453a',
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#ffffff',
-  },
-  sourceRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 4,
-  },
-  sourceButton: {
-    backgroundColor: '#212833',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  sourceButtonActive: {
-    backgroundColor: '#0a84ff',
-    borderColor: '#0a84ff',
-  },
-  sourceText: {
-    color: '#8e93a0',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  sourceTextActive: {
-    color: '#ffffff',
-  },
-  toggleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  helpText: {
-    fontSize: 11,
-    color: '#8e93a0',
-    marginTop: 4,
-  },
-  spinner: {
-    marginTop: 16,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  discoverButton: {
-    backgroundColor: '#0a84ff',
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  discoverButtonText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  discoveredList: {
-    marginTop: 12,
-    padding: 12,
-    backgroundColor: '#161b22',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  discoveredTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#8e93a0',
-    marginBottom: 8,
-  },
-  discoveredItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 12,
-    backgroundColor: '#0d1117',
-    borderRadius: 8,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  discoveredItemInfo: {
-    flex: 1,
-  },
-  discoveredItemIp: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#0a84ff',
-    fontFamily: 'monospace',
-  },
-  discoveredItemName: {
-    fontSize: 12,
-    color: '#8e93a0',
-    marginTop: 2,
-  },
-  discoveredItemArrow: {
-    color: '#8e93a0',
-    fontSize: 16,
-  },
-  statusRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  statusIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  statusConnected: {
-    backgroundColor: '#1a3d2e',
-    borderWidth: 1,
-    borderColor: '#30d158',
-  },
-  statusDisconnected: {
-    backgroundColor: '#3d1a1a',
-    borderWidth: 1,
-    borderColor: '#ff453a',
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#ffffff',
-  },
-  sourceRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 4,
-  },
-  sourceButton: {
-    backgroundColor: '#212833',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  sourceButtonActive: {
-    backgroundColor: '#0a84ff',
-    borderColor: '#0a84ff',
-  },
-  sourceText: {
-    color: '#8e93a0',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  sourceTextActive: {
-    color: '#ffffff',
-  },
-  toggleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  helpText: {
-    fontSize: 11,
-    color: '#8e93a0',
-    marginTop: 4,
-  },
-  spinner: {
-    marginTop: 16,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  discoverButton: {
-    backgroundColor: '#0a84ff',
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  discoverButtonText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  discoveredList: {
-    marginTop: 12,
-    padding: 12,
-    backgroundColor: '#161b22',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  discoveredTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#8e93a0',
-    marginBottom: 8,
-  },
-  discoveredItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 12,
-    backgroundColor: '#0d1117',
-    borderRadius: 8,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  discoveredItemInfo: {
-    flex: 1,
-  },
-  discoveredItemIp: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#0a84ff',
-    fontFamily: 'monospace',
-  },
-  discoveredItemName: {
-    fontSize: 12,
-    color: '#8e93a0',
-    marginTop: 2,
-  },
-  discoveredItemArrow: {
-    color: '#8e93a0',
-    fontSize: 16,
-  },
-  statusRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  statusIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  statusConnected: {
-    backgroundColor: '#1a3d2e',
-    borderWidth: 1,
-    borderColor: '#30d158',
-  },
-  statusDisconnected: {
-    backgroundColor: '#3d1a1a',
-    borderWidth: 1,
-    borderColor: '#ff453a',
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#ffffff',
-  },
-  sourceRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 4,
-  },
-  sourceButton: {
-    backgroundColor: '#212833',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  sourceButtonActive: {
-    backgroundColor: '#0a84ff',
-    borderColor: '#0a84ff',
-  },
-  sourceText: {
-    color: '#8e93a0',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  sourceTextActive: {
-    color: '#ffffff',
-  },
-  toggleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  helpText: {
-    fontSize: 11,
-    color: '#8e93a0',
-    marginTop: 4,
-  },
-  spinner: {
-    marginTop: 16,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  discoverButton: {
-    backgroundColor: '#0a84ff',
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  discoverButtonText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  discoveredList: {
-    marginTop: 12,
-    padding: 12,
-    backgroundColor: '#161b22',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  discoveredTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#8e93a0',
-    marginBottom: 8,
-  },
-  discoveredItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 12,
-    backgroundColor: '#0d1117',
-    borderRadius: 8,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  discoveredItemInfo: {
-    flex: 1,
-  },
-  discoveredItemIp: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#0a84ff',
-    fontFamily: 'monospace',
-  },
-  discoveredItemName: {
-    fontSize: 12,
-    color: '#8e93a0',
-    marginTop: 2,
-  },
-  discoveredItemArrow: {
-    color: '#8e93a0',
-    fontSize: 16,
-  },
-  statusRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  statusIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  statusConnected: {
-    backgroundColor: '#1a3d2e',
-    borderWidth: 1,
-    borderColor: '#30d158',
-  },
-  statusDisconnected: {
-    backgroundColor: '#3d1a1a',
-    borderWidth: 1,
-    borderColor: '#ff453a',
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#ffffff',
-  },
-  sourceRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 4,
-  },
-  sourceButton: {
-    backgroundColor: '#212833',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  sourceButtonActive: {
-    backgroundColor: '#0a84ff',
-    borderColor: '#0a84ff',
-  },
-  sourceText: {
-    color: '#8e93a0',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  sourceTextActive: {
-    color: '#ffffff',
-  },
-  toggleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  helpText: {
-    fontSize: 11,
-    color: '#8e93a0',
-    marginTop: 4,
-  },
-  spinner: {
-    marginTop: 16,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  discoverButton: {
-    backgroundColor: '#0a84ff',
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  discoverButtonText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  discoveredList: {
-    marginTop: 12,
-    padding: 12,
-    backgroundColor: '#161b22',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  discoveredTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#8e93a0',
-    marginBottom: 8,
-  },
-  discoveredItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 12,
-    backgroundColor: '#0d1117',
-    borderRadius: 8,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  discoveredItemInfo: {
-    flex: 1,
-  },
-  discoveredItemIp: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#0a84ff',
-    fontFamily: 'monospace',
-  },
-  discoveredItemName: {
-    fontSize: 12,
-    color: '#8e93a0',
-    marginTop: 2,
-  },
-  discoveredItemArrow: {
-    color: '#8e93a0',
-    fontSize: 16,
-  },
-  statusRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  statusIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  statusConnected: {
-    backgroundColor: '#1a3d2e',
-    borderWidth: 1,
-    borderColor: '#30d158',
-  },
-  statusDisconnected: {
-    backgroundColor: '#3d1a1a',
-    borderWidth: 1,
-    borderColor: '#ff453a',
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#ffffff',
-  },
-  sourceRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 4,
-  },
-  sourceButton: {
-    backgroundColor: '#212833',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  sourceButtonActive: {
-    backgroundColor: '#0a84ff',
-    borderColor: '#0a84ff',
-  },
-  sourceText: {
-    color: '#8e93a0',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  sourceTextActive: {
-    color: '#ffffff',
-  },
-  toggleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  helpText: {
-    fontSize: 11,
-    color: '#8e93a0',
-    marginTop: 4,
-  },
-  spinner: {
-    marginTop: 16,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  discoverButton: {
-    backgroundColor: '#0a84ff',
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  discoverButtonText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  discoveredList: {
-    marginTop: 12,
-    padding: 12,
-    backgroundColor: '#161b22',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  discoveredTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#8e93a0',
-    marginBottom: 8,
-  },
-  discoveredItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 12,
-    backgroundColor: '#0d1117',
-    borderRadius: 8,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  discoveredItemInfo: {
-    flex: 1,
-  },
-  discoveredItemIp: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#0a84ff',
-    fontFamily: 'monospace',
-  },
-  discoveredItemName: {
-    fontSize: 12,
-    color: '#8e93a0',
-    marginTop: 2,
-  },
-  discoveredItemArrow: {
-    color: '#8e93a0',
-    fontSize: 16,
-  },
-  statusRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  statusIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  statusConnected: {
-    backgroundColor: '#1a3d2e',
-    borderWidth: 1,
-    borderColor: '#30d158',
-  },
-  statusDisconnected: {
-    backgroundColor: '#3d1a1a',
-    borderWidth: 1,
-    borderColor: '#ff453a',
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#ffffff',
-  },
-  sourceRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 4,
-  },
-  sourceButton: {
-    backgroundColor: '#212833',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  sourceButtonActive: {
-    backgroundColor: '#0a84ff',
-    borderColor: '#0a84ff',
-  },
-  sourceText: {
-    color: '#8e93a0',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  sourceTextActive: {
-    color: '#ffffff',
-  },
-  toggleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  helpText: {
-    fontSize: 11,
-    color: '#8e93a0',
-    marginTop: 4,
-  },
-  spinner: {
-    marginTop: 16,
   },
 });
-
-export default HomeScreen;
