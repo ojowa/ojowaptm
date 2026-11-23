@@ -1,7 +1,6 @@
 /**
  * HomeScreen.tsx — ojowaPTM main screen.
  * Phone as Mic: connect to OBS and stream your Android microphone over WiFi.
- * When streaming starts, renders StreamingScreen.
  */
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
@@ -32,7 +31,6 @@ const DISCOVERY_MAGIC = 'OPTM_DISCOVER';
 const DISCOVERY_RESPONSE_MAGIC = 'OPTM_DISC_RESP';
 const DISCOVERY_TIMEOUT_MS = 4000;
 
-// Native UDP discovery module
 const { ObsDiscovery } = NativeModules as {
   ObsDiscovery?: {
     startDiscovery(): void;
@@ -40,10 +38,8 @@ const { ObsDiscovery } = NativeModules as {
   }
 };
 
-// Event emitter for discovery responses
 const discoveryEmitter = new NativeEventEmitter(ObsDiscovery as any);
 
-// Custom keep-awake hook using native Wakelock
 const useKeepAwake = (enabled: boolean) => {
   const wakeLockRef = useRef<any>(null);
   useEffect(() => {
@@ -66,7 +62,6 @@ const useKeepAwake = (enabled: boolean) => {
   }, [enabled]);
 };
 
-// Get local IP address using react-native's native bridge
 const getIpAddress = async (): Promise<string> => {
   if (Platform.OS === 'android') {
     const NetworkInfo = require('react-native').NativeModules.NetworkInfo;
@@ -103,8 +98,6 @@ export default function HomeScreen() {
   const [isDiscovering, setIsDiscovering] = useState(false);
   const discoverySubRef = useRef<any>(null);
 
-  // ---- Handler functions (defined before use) ----
-
   const toggleMute = () => {
     setState((prev) => ({ ...prev, isMuted: !prev.isMuted }));
   };
@@ -140,7 +133,6 @@ export default function HomeScreen() {
       return;
     }
 
-    // Request microphone permission
     if (Platform.OS === 'android') {
       const granted = await PermissionsAndroid.request(
         PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
@@ -219,8 +211,6 @@ export default function HomeScreen() {
     [connection.host]
   );
 
-  // ---- Effects ----
-
   useEffect(() => {
     (async () => {
       try {
@@ -245,7 +235,6 @@ export default function HomeScreen() {
     };
   }, []);
 
-  // Auto-populate connection when exactly one OBS is discovered
   useEffect(() => {
     if (
       discoveredServers.length === 1 &&
@@ -298,9 +287,6 @@ export default function HomeScreen() {
 
   useKeepAwake(state.isStreaming);
 
-  // ---- Render ----
-
-  // Render streaming screen when active
   if (state.isStreaming) {
     return (
       <StreamingScreen
@@ -321,13 +307,11 @@ export default function HomeScreen() {
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <StatusBar barStyle="light-content" />
 
-      {/* Header */}
       <View style={styles.header}>
         <Text style={styles.title}>ojowaPTM</Text>
         <Text style={styles.subtitle}>Phone as Mic for OBS</Text>
       </View>
 
-      {/* Connection Status */}
       <View style={styles.card}>
         <View style={styles.statusRow}>
           <Text style={styles.sectionTitle}>Connection</Text>
@@ -345,7 +329,6 @@ export default function HomeScreen() {
         )}
       </View>
 
-      {/* Your Phone IP */}
       <View style={styles.card}>
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>Your Phone IP</Text>
@@ -353,7 +336,6 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      {/* OBS PC Configuration */}
       <View style={styles.card}>
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>OBS PC (WiFi)</Text>
@@ -399,7 +381,6 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      {/* Audio Source */}
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Audio Source</Text>
         <View style={styles.sourceRow}>
@@ -417,7 +398,6 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      {/* Ultra-Low Latency Toggle */}
       <View style={styles.card}>
         <View style={styles.toggleRow}>
           <Text style={styles.sectionTitle}>Ultra-Low Latency</Text>
@@ -434,7 +414,6 @@ export default function HomeScreen() {
         </Text>
       </View>
 
-      {/* Main Controls */}
       <View style={styles.controls}>
         <TouchableOpacity
           style={[styles.button, state.isStreaming ? styles.buttonLive : styles.buttonIdle, state.isConnecting && styles.buttonConnecting]}
@@ -454,7 +433,6 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Error Display */}
       {state.error && (
         <View style={styles.errorCard}>
           <Text style={styles.errorText}>{state.error}</Text>
