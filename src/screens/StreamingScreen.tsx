@@ -21,17 +21,20 @@ import { WiFiStreamService } from '../services/WiFiStreamService';
 import { UltraLowLatencyStreamService } from '../services/UltraLowLatencyStreamService';
 import type { AudioConfig, ObsConnection, StreamState } from '../types';
 import { DEFAULT_AUDIO_CONFIG, DEFAULT_OBS_PORT } from '../types';
+import { baseStyles, statusBadgeStyles } from '../styles/common';
 
 type StreamingScreenProps = {
   config: AudioConfig;
   connection: ObsConnection;
   state: StreamState;
   ultraLowLatency: boolean;
+  phoneIp: string;
   onStop: () => void;
   onToggleMute: () => void;
   onToggleUltraLowLatency: (value: boolean) => void;
   onUpdateAudioSource: (source: string) => void;
   audioSource: string;
+  lastSendTime: number;
 };
 
 export default function StreamingScreen({
@@ -39,26 +42,15 @@ export default function StreamingScreen({
   connection,
   state,
   ultraLowLatency,
+  phoneIp,
   onStop,
   onToggleMute,
   onToggleUltraLowLatency,
   onUpdateAudioSource,
   audioSource,
+  lastSendTime,
 }: StreamingScreenProps) {
   const [lastSendTime, setLastSendTime] = useState<number>(0);
-  const [levelInterval, setLevelInterval] = useState<any>(null);
-
-  useEffect(() => {
-    if (state.isStreaming && !levelInterval) {
-      const interval = setInterval(() => {
-        setLastSendTime(Date.now());
-      }, 1000);
-      setLevelInterval(interval);
-    }
-    return () => {
-      if (levelInterval) clearInterval(levelInterval);
-    };
-  }, [state.isStreaming, levelInterval]);
 
   const handleStop = useCallback(() => {
     onStop();
@@ -88,7 +80,7 @@ export default function StreamingScreen({
         </View>
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>Your Phone IP</Text>
-          <Text style={styles.infoValue}>{state.obshost || '—'}</Text>
+          <Text style={styles.infoValue}>{phoneIp || '—'}</Text>
         </View>
       </View>
 
@@ -119,13 +111,13 @@ export default function StreamingScreen({
       <View style={styles.meterCard}>
         <View style={styles.meterHeader}>
           <Text style={styles.sectionTitle}>Latency</Text>
-          <Text style={styles.levelText}>{state.level > 0 ? `${Math.round(state.level * 100)}ms` : '—'}</Text>
+          <Text style={styles.levelText}>{state.last_latency_ms ? `${state.last_latency_ms}ms` : '—'}</Text>
         </View>
         <View style={styles.meterTrack}>
-          <View style={[styles.meterFill, { width: Math.min(state.level * 2, 1) * 100 + '%' }]} />
+          <View style={[styles.meterFill, { width: Math.min(state.last_latency_ms / 100, 1) * 100 + '%' }]} />
         </View>
         <Text style={styles.latencyDetail}>
-          {lastSendTime > 0 ? `Last send: ${Date.now() - lastSendTime} ms ago` : 'Waiting…'}
+          {lastSendTime > 0 ? `Last send: ${Date.now() - lastSendTime} ms ago` : 'Waiting for first send…'}
         </Text>
       </View>
 

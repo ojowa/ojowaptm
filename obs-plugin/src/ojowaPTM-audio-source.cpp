@@ -65,6 +65,7 @@ struct ojowaptm_audio_data {
 
     std::mutex queue_mutex;
     std::condition_variable queue_cv;
+    std::mutex settings_mutex;   // T21: protects obs_source_update from net_thread races
     std::vector<std::vector<uint8_t>> pcm_queue;
 
     uint32_t sample_rate = 48000;
@@ -205,9 +206,10 @@ static void *net_thread_proc(void *param) {
             data->client_connected.store(true);
             data->connected_ip = client_ip;
             
-            // Update OBS source properties to show connection status
+            // Update OBS source properties to show connection status (T21: thread-safe)
             obs_source_t *source = data->source;
             if (source) {
+                std::lock_guard<std::mutex> lock(data->settings_mutex);
                 obs_data_t *settings = obs_source_get_settings(source);
                 obs_data_set_string(settings, "connection_status", "Connected");
                 obs_data_set_string(settings, "connected_ip", client_ip);
@@ -260,11 +262,17 @@ static void *net_thread_proc(void *param) {
                     ((uint64_t)header[16] << 48) |
                     ((uint64_t)header[17] << 56);
 
+                // T16: Validate sample rate before accepting stream
+                if (sample_rate != 48000 && sample_rate != 44100 && sample_rate != 16000) {
+                    blog(LOG_WARNING, "ojowaPTM: unsupported sample rate %u from %s, disconnecting", sample_rate, client_ip);
+                    goto disconnect;
+                }
                 data->sample_rate = sample_rate;
                 data->channels = channels;
 
                 // Calculate latency: current time - sent timestamp
-                auto now = std::chrono::steady_clock::now();
+                // Use system_clock (wall-clock epoch) to match the phone's Date.now() timestamp
+                auto now = std::chrono::system_clock::now();
                 auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
                 int64_t latency_ms = (now_us - (int64_t)timestamp_us) / 1000;
                 if (latency_ms > 0 && latency_ms < 5000) { // sanity check
@@ -277,6 +285,7 @@ static void *net_thread_proc(void *param) {
                         latency_update_counter = 0;
                         obs_source_t *latency_src = data->source;
                         if (latency_src) {
+                            std::lock_guard<std::mutex> lock(data->settings_mutex);
                             obs_data_t *latency_settings = obs_source_get_settings(latency_src);
                             obs_data_set_string(latency_settings, "latency_ms", std::to_string((int)latency_ms).c_str());
                             obs_source_update(latency_src, latency_settings);
@@ -330,6 +339,7 @@ static void *net_thread_proc(void *param) {
             // Update OBS source properties to show disconnected
             obs_source_t *src = data->source;
             if (src) {
+                std::lock_guard<std::mutex> lock(data->settings_mutex);
                 obs_data_t *settings = obs_source_get_settings(src);
                 obs_data_set_string(settings, "connection_status", "Disconnected");
                 obs_data_set_string(settings, "connected_ip", "");
@@ -636,7 +646,7 @@ static bool ojowaptm_audio_render(void *data, uint64_t *ts_out,
         }
     }
 
-    if (chunk.empty()) return false;
+    if (chunk.empty()) return true; // Output silence instead of dropping audio blocks
 
     if (channels == 0) return false;
     size_t frames = chunk.size() / (2 * channels);

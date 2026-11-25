@@ -47,7 +47,7 @@ This document describes the complete audio signal path from the Android phone's 
 │ • JNI call       │     │ • Vector of      │     │   samples        │
 │ • Base64 encode  │     │   uint8_t chunks │     │ • Mixes with     │
 │ • Event emit     │     │ • Max chunks     │     │   other sources  │
-│   (onAudioData)  │     │   unbounded      │     │ • Outputs to     │
+│   (onAudioData)  │     │   (drop oldest)  │     │ • Outputs to     │
 │                  │     │ • Protected by   │     │   monitor/stream │
 └────────┬─────────┘     │   mutex          │     └──────────────────┘
          │               └────────┬─────────┘
@@ -265,6 +265,7 @@ while (data->running.load()) {
 | Select Timeout | 50 ms (fast disconnect detection) |
 | Recv Buffer | 4 KB |
 | Queue | `std::vector<std::vector<uint8_t>>` |
+| Queue Cap | 200 chunks (~4 seconds at 50 chunks/sec); oldest dropped when full |
 | Synchronization | `mutex` + `condition_variable` |
 | Magic Check | First 4 bytes = "OPTM" |
 
@@ -426,10 +427,10 @@ ojowaPTM: latency 38 ms
 | Android App (Debug) | 1.0.1 | ✅ Running |
 | Metro Bundler | 0.80.12 | ✅ Asset-registry fixed |
 | Phone → OBS TCP | 1.0.1 | ✅ 18-byte header |
-| OBS Plugin MSI | **Old** | ❌ Expects 10-byte header |
-| GitHub Actions Build | `a18067c` | ⏳ Building |
+| OBS Plugin MSI | 1.0.1 | ✅ 18-byte header parsed |
+| GitHub Actions Build | `a18067c` | ✅ Complete |
 
-**Blocker:** OBS plugin MSI must be rebuilt from latest commit to parse 18-byte header and calculate latency.
+**Note:** OBS plugin MSI now parses the 18-byte "OPTM" header (magic + sampleRate + channels + bitDepth + 8-byte timestamp) matching the Android app. Rebuild via CI workflow `obs-plugin-ci.yml` to ship.
 
 ---
 

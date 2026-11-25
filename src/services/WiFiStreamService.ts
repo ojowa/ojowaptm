@@ -70,6 +70,7 @@ const MAX_RECONNECT = 10;
 let pendingPcm: Int16Array[] = [];
 let flushTimer: any = null;
 const FLUSH_INTERVAL_MS = 20;
+let isReconnecting = false;
 
 export class WiFiStreamService {
   private static onStateChange: StateChange | null = null;
@@ -80,7 +81,7 @@ export class WiFiStreamService {
   ): Promise<boolean> {
     WiFiStreamService.onStateChange = onStateChange;
     isIntentionalDisconnect = false; // Reset on new connection
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       if (socket) {
         socket.destroy();
         socket = null;
@@ -96,8 +97,22 @@ export class WiFiStreamService {
 
       socket.setNoDelay(true);
 
+      // --- Connection timeout (T03): reject if OBS does not accept within 5s ---
+      const CONNECT_TIMEOUT_MS = 5000;
+      let connectTimer: any = setTimeout(() => {
+        isConnected = false;
+        const msg = `Connection timed out after ${CONNECT_TIMEOUT_MS / 1000}s`;
+        console.error(msg);
+        try { socket.destroy(); } catch {}
+        socket = null;
+        WiFiStreamService.onStateChange?.({ connected: false, error: msg });
+        reject(msg);
+      }, CONNECT_TIMEOUT_MS);
+
       socket.on('connect', () => {
+        clearTimeout(connectTimer);
         isConnected = true;
+        isReconnecting = false;
         reconnectAttempts = 0;
         clearTimeout(reconnectTimer);
         WiFiStreamService.onStateChange?.({ connected: true, error: null });
@@ -111,12 +126,14 @@ export class WiFiStreamService {
       });
 
       socket.on('error', (err: any) => {
+        clearTimeout(connectTimer);
         isConnected = false;
         const msg = err?.message || 'Socket error';
         console.error('Socket error:', msg);
         WiFiStreamService.onStateChange?.({ connected: false, error: msg });
+        // T06: Do NOT schedule reconnect here — resolve false and let caller decide.
+        // Reconnection is handled by the 'close' event (hadError path) separately.
         resolve(false);
-        WiFiStreamService._scheduleReconnect(connection, onStateChange);
       });
 
       socket.on('close', (hadError: boolean) => {
@@ -138,8 +155,11 @@ export class WiFiStreamService {
   ): void {
     if (reconnectAttempts >= MAX_RECONNECT) {
       console.log('Max reconnect attempts reached');
+      isReconnecting = false;
+      WiFiStreamService.onStateChange?.({ connected: false, error: 'Connection lost - max retries reached' });
       return;
     }
+    isReconnecting = true;
     reconnectAttempts++;
     const delay = Math.min(1000 * reconnectAttempts, 10000);
     clearTimeout(reconnectTimer);
@@ -147,6 +167,10 @@ export class WiFiStreamService {
       console.log('Reconnect attempt', reconnectAttempts);
       WiFiStreamService.connect(connection, onStateChange);
     }, delay);
+  }
+
+  static getIsReconnecting(): boolean {
+    return isReconnecting;
   }
 
   static sendPcm(config: AudioConfig, pcm: Int16Array): void {

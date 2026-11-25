@@ -23,6 +23,7 @@ const { UltraLowLatencyAudio } = NativeModules as {
   UltraLowLatencyAudio?: {
     setAudioSource(source: string): void;
     setServer(host: string, port: number): void;
+    setMuted(muted: boolean): void;
     startCapture(): void;
     stopCapture(): Promise<void>;
     isCapturing(): boolean;
@@ -217,6 +218,16 @@ export class UltraLowLatencyStreamService {
         resolve(false);
       }
     });
+  }
+
+  static setMuted(muted: boolean): void {
+    if (UltraLowLatencyAudio) {
+      try {
+        UltraLowLatencyAudio.setMuted(muted);
+      } catch (err) {
+        console.error('UltraLowLatencyAudio setMuted error:', err);
+      }
+    }
   }
 
   static isConnected(): boolean {

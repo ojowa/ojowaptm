@@ -39,6 +39,7 @@ public class UltraLowLatencyAudioModule extends ReactContextBaseJavaModule {
     private final ReactApplicationContext reactContext;
     private final AtomicBoolean isRunning = new AtomicBoolean(false);
     private final AtomicLong framesSent = new AtomicLong(0);
+    private final AtomicBoolean isMuted = new AtomicBoolean(false);
     
     private Thread captureThread;
     private Thread networkThread;
@@ -95,6 +96,12 @@ public class UltraLowLatencyAudioModule extends ReactContextBaseJavaModule {
     }
 
     @ReactMethod
+    public void setMuted(boolean muted) {
+        isMuted.set(muted);
+        Log.i(TAG, "Mute set to: " + muted);
+    }
+
+    @ReactMethod
     public void startCapture() {
         if (isRunning.get()) {
             Log.w(TAG, "Already running");
@@ -148,7 +155,11 @@ public class UltraLowLatencyAudioModule extends ReactContextBaseJavaModule {
 
             isRunning.set(true);
             framesSent.set(0);
-            Log.i(TAG, "isRunning set to true, starting threads");
+            Log.i(TAG, "isRunning set to true, starting AudioRecord");
+
+            // Start AudioRecord BEFORE threads so captureLoop never blocks on an unstarted recorder
+            audioRecord.startRecording();
+            Log.i(TAG, "AudioRecord started, now launching threads");
 
             // Network thread - handles socket writes
             networkThread = new Thread(this::networkLoop, "UltraLowLatency-Network");
@@ -160,7 +171,6 @@ public class UltraLowLatencyAudioModule extends ReactContextBaseJavaModule {
             captureThread.setPriority(Thread.MAX_PRIORITY);
             captureThread.start();
 
-            audioRecord.startRecording();
             Log.i(TAG, "Ultra-low latency capture STARTED: " + CHUNK_MS + "ms chunks, buffer=" + bufferSize);
 
         } catch (Exception e) {
@@ -175,18 +185,26 @@ public class UltraLowLatencyAudioModule extends ReactContextBaseJavaModule {
             try {
                 int read = audioRecord.read(audioBuffer, 0, audioBuffer.length);
                 if (read > 0 && isRunning.get()) {
-                    // Build packet: header + PCM
-                    buildPacket(read);
+                    // T17: When muted, send silence (zeros) instead of actual PCM
+                    if (isMuted.get()) {
+                        // Build header only, zero out PCM portion
+                        buildPacket(read);
+                        // PCM data already in packetBuffer[18...] from audioRecord.read(),
+                        // but we zero it out for mute
+                        java.util.Arrays.fill(packetBuffer, HEADER_SIZE, HEADER_SIZE + read, (byte) 0);
+                    } else {
+                        // Build packet: header + PCM
+                        buildPacket(read);
+                        // Copy PCM data from audioBuffer into packetBuffer after header
+                        System.arraycopy(audioBuffer, 0, packetBuffer, HEADER_SIZE, read);
+                    }
                     
-                    // Copy PCM data from audioBuffer into packetBuffer after header
-                    System.arraycopy(audioBuffer, 0, packetBuffer, HEADER_SIZE, read);
-                    
-                    // Non-blocking queue to network thread would be ideal,
-                    // but for simplicity write directly (outputStream is buffered)
                     outputStream.write(packetBuffer, 0, HEADER_SIZE + read);
                     outputStream.flush(); // Force immediate send
                     
-                    framesSent.addAndGet(read / 2);
+                    if (!isMuted.get()) {
+                        framesSent.addAndGet(read / 2);
+                    }
                 } else if (read < 0) {
                     Log.w(TAG, "AudioRecord read error: " + read);
                 }
@@ -254,7 +272,12 @@ public class UltraLowLatencyAudioModule extends ReactContextBaseJavaModule {
         // Signal threads to stop first
         isRunning.set(false);
 
-        // Interrupt threads to unblock any blocking calls (e.g., audioRecord.read())
+        // T20: Stop AudioRecord FIRST to unblock any blocking read() in captureLoop
+        if (audioRecord != null) {
+            try { audioRecord.stop(); } catch (Exception ignored) {}
+        }
+
+        // Interrupt threads to unblock any remaining blocking calls
         if (captureThread != null) {
             captureThread.interrupt();
         }
@@ -282,7 +305,6 @@ public class UltraLowLatencyAudioModule extends ReactContextBaseJavaModule {
 
         // Now clean up resources safely
         if (audioRecord != null) {
-            try { audioRecord.stop(); } catch (Exception ignored) {}
             try { audioRecord.release(); } catch (Exception ignored) {}
             audioRecord = null;
         }

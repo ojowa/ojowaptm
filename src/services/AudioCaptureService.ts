@@ -6,16 +6,18 @@
  */
 
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
-import type { AudioConfig, AudioSource } from '../types';
+import type { AudioConfig, AudioSource, StreamErrorType } from '../types';
 
 type PcmCallback = (pcm: Int16Array) => void;
 type LevelCallback = (level: number) => void;
+type ErrorCallback = (message: string, type: StreamErrorType) => void;
 
 const { AudioMicModule } = NativeModules as { AudioMicModule?: any };
 
 let isCapturing = false;
 let pcmCallback: PcmCallback | null = null;
 let levelCallback: LevelCallback | null = null;
+let errorCallback: ErrorCallback | null = null;
 let pcmSubscription: any = null;
 let levelSubscription: any = null;
 let errorSubscription: any = null;
@@ -24,7 +26,8 @@ export class AudioCaptureService {
   static async startCapture(
     config: AudioConfig,
     onPcm: PcmCallback,
-    onLevel: LevelCallback
+    onLevel: LevelCallback,
+    onError?: ErrorCallback
   ): Promise<boolean> {
     if (isCapturing) return true;
     if (!AudioMicModule) {
@@ -36,6 +39,7 @@ export class AudioCaptureService {
 
     pcmCallback = onPcm;
     levelCallback = onLevel;
+    errorCallback = onError ?? null;
 
     pcmSubscription = eventEmitter.addListener('onAudioData', (event: any) => {
       if (!pcmCallback && !levelCallback) return;
@@ -55,8 +59,9 @@ export class AudioCaptureService {
           sum += s * s;
         }
         const rms = Math.sqrt(sum / int16.length);
-        // Map roughly: silence ~0, loud ~0.3 RMS → scale to 0..1
-        const level = Math.min(1, rms * 4);
+        // Map roughly: silence ~0, loud ~0.2 RMS → scale to 0..1
+        // T18: Calibrated multiplier so quiet speech registers above 0%
+        const level = Math.min(1, rms * 6);
         levelCallback(level);
       }
 
@@ -71,7 +76,17 @@ export class AudioCaptureService {
     });
 
     errorSubscription = eventEmitter.addListener('onAudioError', (event: any) => {
-      console.error('Audio capture error:', event.message);
+      const msg = event?.message ?? 'Unknown audio error';
+      console.error('Audio capture error:', msg);
+      // T19: Surface async native audio errors to UI state
+      if (errorCallback) {
+        const type: StreamErrorType = msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('microphone') || msg.toLowerCase().includes('record_audio')
+          ? 'audio'
+          : msg.toLowerCase().includes('init') || msg.toLowerCase().includes('state')
+            ? 'audio'
+            : 'unknown';
+        errorCallback(msg, type);
+      }
     });
 
     try {

@@ -43,6 +43,10 @@ npx expo start
 5. In OBS, add the **ojowaPTM Microphone** audio source.
 6. Your phone's mic audio now appears in OBS.
 
+## Security Note
+
+All audio is transported over plain TCP (no TLS/encryption) on your local WiFi network. Anyone on the same WiFi can send audio to OBS. Only use on trusted networks.
+
 ## OBS Plugin (C++)
 
 The plugin listens on TCP port 8765, receives s16le PCM from the phone, converts to float planar, and outputs via `obs_source_output_audio`.

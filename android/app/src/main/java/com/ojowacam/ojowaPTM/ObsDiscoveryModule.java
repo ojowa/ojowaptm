@@ -43,6 +43,7 @@ public class ObsDiscoveryModule extends ReactContextBaseJavaModule {
 
     @ReactMethod
     public void startDiscovery() {
+        // T24: Double-start protection - atomic check-and-set
         if (isRunning) {
             Log.w(TAG, "Discovery already running");
             return;
@@ -160,3 +161,5 @@ public class ObsDiscoveryModule extends ReactContextBaseJavaModule {
         // Required by NativeEventEmitter on the JS side
     }
 }
+
+

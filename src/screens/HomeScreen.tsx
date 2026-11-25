@@ -26,6 +26,7 @@ import { UltraLowLatencyStreamService } from '../services/UltraLowLatencyStreamS
 import StreamingScreen from './StreamingScreen';
 import type { AudioConfig, AudioSource, ObsConnection, StreamState, ObsServerInfo, StreamErrorType } from '../types';
 import { DEFAULT_AUDIO_CONFIG, DEFAULT_OBS_PORT, DEFAULT_DISCOVERY_PORT, AUDIO_SOURCE_OPTIONS } from '../types';
+import { baseStyles, buttonVariantStyles, statusBadgeStyles } from '../styles/common';
 
 const DISCOVERY_MAGIC = 'OPTM_DISCOVER';
 const DISCOVERY_RESPONSE_MAGIC = 'OPTM_DISC_RESP';
@@ -102,12 +103,33 @@ export default function HomeScreen() {
   const [ipAddress, setIpAddress] = useState<string>('');
   const [audioSource, setAudioSource] = useState<AudioSource>('mic');
   const [ultraLowLatency, setUltraLowLatency] = useState<boolean>(false);
+  const [lastSendTime, setLastSendTime] = useState<number>(0);
   const [discoveredServers, setDiscoveredServers] = useState<ObsServerInfo[]>([]);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const discoverySubRef = useRef<any>(null);
 
   const toggleMute = () => {
-    setState((prev) => ({ ...prev, isMuted: !prev.isMuted }));
+    const newMuted = !state.isMuted;
+    setState((prev) => ({ ...prev, isMuted: newMuted }));
+    // T17: Mute works in both standard and ultra-low-latency modes
+    if (ultraLowLatency) {
+      UltraLowLatencyStreamService.setMuted(newMuted);
+    }
+  };
+
+  // T13: Reconnect UX helpers
+  const getConnectionBadgeStyle = () => {
+    if (state.isConnected) return styles.statusConnected;
+    if (state.isConnecting) return styles.statusConnecting;
+    if (WiFiStreamService.getIsReconnecting()) return styles.statusConnecting;
+    return styles.statusIdle;
+  };
+
+  const getConnectionStatusText = () => {
+    if (state.isConnected) return 'CONNECTED';
+    if (state.isConnecting) return 'CONNECTING…';
+    if (WiFiStreamService.getIsReconnecting()) return 'RECONNECTING…';
+    return 'DISCONNECTED';
   };
 
   const handleStopStream = () => {
@@ -130,9 +152,17 @@ export default function HomeScreen() {
     setConnection((prev) => ({ ...prev, port }));
   };
 
-  const updateAudioSource = (source: AudioSource) => {
+  const updateAudioSource = async (source: AudioSource) => {
     setAudioSource(source);
     setConfig((prev) => ({ ...prev, audioSource: source }));
+    // T12: Apply audio source change to native module even while streaming
+    if (AudioCaptureService.isCapturing()) {
+      try {
+        await AudioCaptureService.setAudioSource(source);
+      } catch {
+        // Ignore - source will apply on next capture start
+      }
+    }
   };
 
   const toggleStream = async () => {
@@ -182,12 +212,17 @@ export default function HomeScreen() {
           config,
           (pcm) => {
             if (!state.isMuted && WiFiStreamService.isConnected()) {
-              const sendTime = Date.now();
+              setLastSendTime(Date.now());
               WiFiStreamService.sendPcm(config, pcm);
             }
           },
           (level) => {
             setState((prev) => ({ ...prev, level }));
+          },
+          (message, errorType) => {
+            // T19: Surface async native audio errors to UI state
+            setState((prev) => ({ ...prev, error: message, errorType }));
+            console.error('Audio capture error from native:', message, errorType);
           }
         );
 
@@ -321,6 +356,8 @@ export default function HomeScreen() {
         connection={connection}
         state={state}
         ultraLowLatency={ultraLowLatency}
+        phoneIp={ipAddress}
+        lastSendTime={lastSendTime}
         onStop={handleStopStream}
         onToggleMute={toggleMute}
         onToggleUltraLowLatency={setUltraLowLatency}
@@ -342,16 +379,14 @@ export default function HomeScreen() {
       <View style={styles.card}>
         <View style={styles.statusRow}>
           <Text style={styles.sectionTitle}>Connection</Text>
-          <View style={[styles.statusBadge, state.isConnected ? styles.statusConnected : state.isConnecting ? styles.statusConnecting : styles.statusIdle]}>
-            <Text style={styles.statusText}>
-              {state.isConnected ? 'CONNECTED' : state.isConnecting ? 'CONNECTING…' : 'DISCONNECTED'}
-            </Text>
+          <View style={[baseStyles.statusBadge, getConnectionBadgeStyle()]}>
+            <Text style={baseStyles.statusText}>{getConnectionStatusText()}</Text>
           </View>
         </View>
         {state.lastConnectedIP && (
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>Last Connected</Text>
-            <Text style={styles.infoValue}>{state.lastConnectedIP}:{DEFAULT_OBS_PORT}</Text>
+            <Text style={styles.infoValue}>{state.lastConnectedIP}:{connection.port}</Text>
           </View>
         )}
       </View>
